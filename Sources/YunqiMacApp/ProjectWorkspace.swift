@@ -13,8 +13,12 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class ProjectWorkspace: ObservableObject {
+    let id: UUID = UUID()
+
     @Published private(set) var store: EditorSessionStore
     @Published private(set) var projectURL: URL?
+
+    @Published private(set) var isDirty: Bool = false
 
     @Published var previewTimeSeconds: Double = 0
     @Published var previewDebug: String = ""
@@ -39,13 +43,20 @@ final class ProjectWorkspace: ObservableObject {
     private var playbackConfigured = false
     private var previewConfigured = false
     private var previewCancellable: AnyCancellable?
+    private var dirtyCancellable: AnyCancellable?
+    private var lastSavedFingerprint: Data = Data()
 
     init(projectStore: ProjectStore = JSONProjectStore()) {
         self.projectStore = projectStore
 
-        let session = EditorSession(project: Project(meta: ProjectMeta(name: "Yunqi", fps: 30)))
+        let project = Self.makeDefaultProject(name: "Yunqi", fps: 30)
+        let session = EditorSession(project: project)
         self.store = EditorSessionStore(session: session)
         self.projectURL = nil
+
+        self.lastSavedFingerprint = Self.fingerprint(project)
+        self.isDirty = false
+        startDirtyTracking()
     }
 
     var windowTitle: String {
@@ -58,12 +69,17 @@ final class ProjectWorkspace: ObservableObject {
     // MARK: - File
 
     func newProject(name: String = "Yunqi", fps: Double = 30) {
-        let session = EditorSession(project: Project(meta: ProjectMeta(name: name, fps: fps)))
+        let project = Self.makeDefaultProject(name: name, fps: fps)
+        let session = EditorSession(project: project)
         self.store = EditorSessionStore(session: session)
         self.projectURL = nil
         self.playbackConfigured = false
         self.previewConfigured = false
         self.previewCancellable = nil
+
+        self.lastSavedFingerprint = Self.fingerprint(project)
+        self.isDirty = false
+        startDirtyTracking()
     }
 
     func openProject(url: URL) throws {
@@ -74,6 +90,21 @@ final class ProjectWorkspace: ObservableObject {
         self.playbackConfigured = false
         self.previewConfigured = false
         self.previewCancellable = nil
+
+        self.lastSavedFingerprint = Self.fingerprint(project)
+        self.isDirty = false
+        startDirtyTracking()
+    }
+
+    /// Save if possible; otherwise prompt Save As.
+    /// Returns true if the project is saved, false if user cancelled or save failed.
+    func saveOrPromptSaveAs() -> Bool {
+        do {
+            try saveProject()
+            return true
+        } catch {
+            return presentSavePanel()
+        }
     }
 
     func configurePlaybackIfNeeded() {
@@ -251,11 +282,17 @@ final class ProjectWorkspace: ObservableObject {
             throw WorkspaceError.missingProjectURL
         }
         try projectStore.save(store.project, to: projectURL)
+
+        lastSavedFingerprint = Self.fingerprint(store.project)
+        isDirty = false
     }
 
     func saveProjectAs(url: URL) throws {
         try projectStore.save(store.project, to: url)
         self.projectURL = url
+
+        lastSavedFingerprint = Self.fingerprint(store.project)
+        isDirty = false
     }
 
     // MARK: - Panels
@@ -277,7 +314,8 @@ final class ProjectWorkspace: ObservableObject {
         }
     }
 
-    func presentSavePanel() {
+    @discardableResult
+    func presentSavePanel() -> Bool {
         let panel = NSSavePanel()
         panel.canCreateDirectories = true
         panel.nameFieldStringValue = projectURL?.lastPathComponent ?? "project.json"
@@ -285,11 +323,35 @@ final class ProjectWorkspace: ObservableObject {
         if panel.runModal() == .OK, let url = panel.url {
             do {
                 try saveProjectAs(url: url)
+                return true
             } catch {
                 NSLog("Save project failed: \(error)")
                 NSSound.beep()
+                return false
             }
         }
+
+        return false
+    }
+
+    private func startDirtyTracking() {
+        dirtyCancellable?.cancel()
+        dirtyCancellable = store.$project
+            .sink { [weak self] project in
+                guard let self else { return }
+                self.isDirty = Self.fingerprint(project) != self.lastSavedFingerprint
+            }
+    }
+
+    private static func makeDefaultProject(name: String, fps: Double) -> Project {
+        let defaultTimeline = Timeline(tracks: [Track(kind: .video)])
+        return Project(meta: ProjectMeta(name: name, fps: fps), timeline: defaultTimeline)
+    }
+
+    private static func fingerprint(_ project: Project) -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return (try? encoder.encode(project)) ?? Data()
     }
 
     func presentImportMediaPanel() {

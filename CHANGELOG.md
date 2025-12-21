@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.2.0 (2025-12-21)
+
+第二个测试版本，补齐高频剪辑交互与多工程工作流。
+
+### Highlights
+- 时间线编辑增强：多选/框选、批量移动/删除（一次 Undo/Redo）、Trim 体验完善
+- Ripple Delete：默认 Delete 波纹删除，Shift+Delete 普通删除（保留空隙）
+- 时间线导航：Home/End 到首尾、Shift+滚轮水平滚动、双击空白回播放头
+- 视觉辅助：视频 clip 迷你缩略图、音频 clip 波形（异步缓存，滚动可见范围按需生成）
+- 系统窗口 tab bar 多文档：New/Open 可配置在“当前标签 / 新标签 / 新窗口”打开；关闭未保存提示
+- 工程初始化：新建工程默认自带一条 video track（macOS App 与 CLI init 一致）
+
+### Notes
+- 仍为测试版：导出与素材兼容性、性能与稳定性会继续迭代。
+
+### 安装与运行
+- 这是未签名/未公证的测试构建，macOS 可能提示“无法验证开发者”。
+- 下载 Release 里的 `Yunqi-<tag>-macos.zip`，解压后在终端运行：`./YunqiMacApp`
+
 ## v0.1.0-test.1 (2025-12-21)
 
 首个对外测试版本。

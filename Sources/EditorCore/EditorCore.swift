@@ -83,6 +83,8 @@ public enum ProjectEditError: Error, CustomStringConvertible, Sendable {
     case missingAsset(UUID)
     case missingClip(UUID)
     case missingTrack(UUID)
+    case invalidSplitTime(clipId: UUID, timeSeconds: Double)
+    case splitTooSmall(clipId: UUID, timeSeconds: Double)
 
     public var description: String {
         switch self {
@@ -94,6 +96,10 @@ public enum ProjectEditError: Error, CustomStringConvertible, Sendable {
             return "Missing clip: \(id.uuidString)"
         case let .missingTrack(id):
             return "Missing track: \(id.uuidString)"
+        case let .invalidSplitTime(clipId, timeSeconds):
+            return String(format: "Invalid split time: clip=%@ t=%.3f", clipId.uuidString, timeSeconds)
+        case let .splitTooSmall(clipId, timeSeconds):
+            return String(format: "Split results too small: clip=%@ t=%.3f", clipId.uuidString, timeSeconds)
         }
     }
 }
@@ -243,6 +249,21 @@ public final class ProjectEditor {
         execute(command)
     }
 
+    public func moveClips(_ moves: [(clipId: UUID, startSeconds: Double)]) throws {
+        guard !moves.isEmpty else { return }
+
+        var items: [MoveClipsCommand.Item] = []
+        items.reserveCapacity(moves.count)
+
+        for (clipId, startSeconds) in moves {
+            let (trackId, oldStart) = try locateClip(clipId: clipId)
+            let newStart = max(0, startSeconds)
+            items.append(.init(trackId: trackId, clipId: clipId, oldStartSeconds: oldStart, newStartSeconds: newStart))
+        }
+
+        execute(MoveClipsCommand(items: items))
+    }
+
     public func trimClip(
         clipId: UUID,
         newTimelineStartSeconds: Double? = nil,
@@ -268,6 +289,101 @@ public final class ProjectEditor {
         execute(command)
     }
 
+    public func deleteClip(clipId: UUID) throws {
+        let located = try locateClipIndexed(clipId: clipId)
+        let command = DeleteClipCommand(trackId: located.trackId, clipIndex: located.clipIndex, removed: located.clip)
+        execute(command)
+    }
+
+    public func deleteClips(clipIds: [UUID]) throws {
+        let unique = Array(Set(clipIds))
+        guard !unique.isEmpty else { return }
+
+        var removed: [DeleteClipsCommand.Removed] = []
+        removed.reserveCapacity(unique.count)
+        for id in unique {
+            let located = try locateClipIndexed(clipId: id)
+            removed.append(.init(trackId: located.trackId, clipIndex: located.clipIndex, clip: located.clip))
+        }
+
+        execute(DeleteClipsCommand(removed: removed))
+    }
+
+    /// Ripple delete: delete the clips and shift subsequent clips on the same track left
+    /// by the cumulative duration of deleted clips that come before them.
+    ///
+    /// This keeps the operation as a single undo/redo step.
+    public func rippleDeleteClips(clipIds: [UUID]) throws {
+        let unique = Array(Set(clipIds))
+        guard !unique.isEmpty else { return }
+
+        var removed: [RippleDeleteClipsCommand.Removed] = []
+        removed.reserveCapacity(unique.count)
+
+        for id in unique {
+            let located = try locateClipIndexed(clipId: id)
+            removed.append(.init(trackId: located.trackId, clipIndex: located.clipIndex, clip: located.clip))
+        }
+
+        // Precompute moves for stable redo.
+        let removedByTrack = Dictionary(grouping: removed, by: { $0.trackId })
+        var moves: [RippleDeleteClipsCommand.MoveItem] = []
+
+        for (trackId, removedItems) in removedByTrack {
+            guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { continue }
+            let track = project.timeline.tracks[trackIndex]
+
+            let deletedIds = Set(removedItems.map { $0.clip.id })
+            let deletedClipsSorted = removedItems.map { $0.clip }.sorted { $0.timelineStartSeconds < $1.timelineStartSeconds }
+            let deletedDurationById: [UUID: Double] = Dictionary(uniqueKeysWithValues: deletedClipsSorted.map { ($0.id, $0.durationSeconds) })
+
+            // Iterate clips in timeline order, accumulating the shift as we pass deleted clips.
+            let sortedClips = track.clips.sorted { $0.timelineStartSeconds < $1.timelineStartSeconds }
+            var cumulativeShift: Double = 0
+            for clip in sortedClips {
+                if deletedIds.contains(clip.id) {
+                    cumulativeShift += deletedDurationById[clip.id] ?? clip.durationSeconds
+                    continue
+                }
+                guard cumulativeShift > 0 else { continue }
+                let oldStart = clip.timelineStartSeconds
+                let newStart = max(0, oldStart - cumulativeShift)
+                if abs(newStart - oldStart) > 1e-12 {
+                    moves.append(.init(trackId: trackId, clipId: clip.id, oldStartSeconds: oldStart, newStartSeconds: newStart))
+                }
+            }
+        }
+
+        execute(RippleDeleteClipsCommand(removed: removed, moves: moves))
+    }
+
+    public func splitClip(clipId: UUID, at timeSeconds: Double) throws {
+        let located = try locateClipIndexed(clipId: clipId)
+        let clip = located.clip
+        let start = clip.timelineStartSeconds
+        let end = clip.timelineStartSeconds + clip.durationSeconds
+        let t = timeSeconds
+
+        // Must split strictly inside clip bounds.
+        guard t > start + 1e-9, t < end - 1e-9 else {
+            throw ProjectEditError.invalidSplitTime(clipId: clipId, timeSeconds: timeSeconds)
+        }
+
+        let leftDisplay = t - start
+        let rightDisplay = end - t
+        if leftDisplay < ProjectEditorConstants.minClipDurationSeconds || rightDisplay < ProjectEditorConstants.minClipDurationSeconds {
+            throw ProjectEditError.splitTooSmall(clipId: clipId, timeSeconds: timeSeconds)
+        }
+
+        let command = SplitClipCommand(
+            trackId: located.trackId,
+            clipIndex: located.clipIndex,
+            original: clip,
+            splitTimeSeconds: t
+        )
+        execute(command)
+    }
+
     private func locateClip(clipId: UUID) throws -> (trackId: UUID, startSeconds: Double) {
         for track in project.timeline.tracks {
             if let clip = track.clips.first(where: { $0.id == clipId }) {
@@ -285,10 +401,117 @@ public final class ProjectEditor {
         }
         throw ProjectEditError.missingClip(clipId)
     }
+
+    private func locateClipIndexed(clipId: UUID) throws -> (trackId: UUID, trackIndex: Int, clipIndex: Int, clip: Clip) {
+        for (tIndex, track) in project.timeline.tracks.enumerated() {
+            if let cIndex = track.clips.firstIndex(where: { $0.id == clipId }) {
+                return (track.id, tIndex, cIndex, track.clips[cIndex])
+            }
+        }
+        throw ProjectEditError.missingClip(clipId)
+    }
 }
 
 private enum ProjectEditorConstants {
     static let minClipDurationSeconds: Double = 0.05
+}
+
+private struct DeleteClipCommand: EditorCommand {
+    let trackId: UUID
+    let clipIndex: Int
+    let removed: Clip
+
+    var name: String { "Delete Clip" }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard project.timeline.tracks[trackIndex].clips.indices.contains(clipIndex) else { return }
+        // Defensive: ensure the clip still matches.
+        if project.timeline.tracks[trackIndex].clips[clipIndex].id != removed.id {
+            // Fallback: remove by id.
+            project.timeline.tracks[trackIndex].clips.removeAll { $0.id == removed.id }
+            return
+        }
+        project.timeline.tracks[trackIndex].clips.remove(at: clipIndex)
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        var clips = project.timeline.tracks[trackIndex].clips
+        if clipIndex <= clips.count {
+            clips.insert(removed, at: clipIndex)
+        } else {
+            clips.append(removed)
+        }
+        project.timeline.tracks[trackIndex].clips = clips
+    }
+}
+
+private struct SplitClipCommand: EditorCommand {
+    let trackId: UUID
+    let clipIndex: Int
+    let original: Clip
+    let splitTimeSeconds: Double
+
+    // Right clip id is fixed so redo keeps identity stable.
+    let rightClipId: UUID = UUID()
+
+    var name: String { "Split Clip" }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard project.timeline.tracks[trackIndex].clips.indices.contains(clipIndex) else { return }
+        guard project.timeline.tracks[trackIndex].clips[clipIndex].id == original.id else {
+            // Fallback: find by id.
+            guard let idx = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == original.id }) else { return }
+            return applyAtResolvedIndex(project: &project, trackIndex: trackIndex, resolvedClipIndex: idx)
+        }
+        applyAtResolvedIndex(project: &project, trackIndex: trackIndex, resolvedClipIndex: clipIndex)
+    }
+
+    private func applyAtResolvedIndex(project: inout Project, trackIndex: Int, resolvedClipIndex: Int) {
+        let clip = project.timeline.tracks[trackIndex].clips[resolvedClipIndex]
+        let start = clip.timelineStartSeconds
+        let end = clip.timelineStartSeconds + clip.durationSeconds
+        let t = splitTimeSeconds
+        if !(t > start + 1e-9 && t < end - 1e-9) { return }
+
+        let leftDisplay = t - start
+        let rightDisplay = end - t
+        if leftDisplay < ProjectEditorConstants.minClipDurationSeconds || rightDisplay < ProjectEditorConstants.minClipDurationSeconds { return }
+
+        let speed = clip.speed
+
+        var left = clip
+        left.durationSeconds = leftDisplay
+
+        var right = clip
+        right.id = rightClipId
+        right.timelineStartSeconds = t
+        right.sourceInSeconds = clip.sourceInSeconds + leftDisplay * max(0.0001, speed)
+        right.durationSeconds = rightDisplay
+
+        project.timeline.tracks[trackIndex].clips[resolvedClipIndex] = left
+        project.timeline.tracks[trackIndex].clips.insert(right, at: resolvedClipIndex + 1)
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        // Remove the right clip if present, then restore the original clip.
+        project.timeline.tracks[trackIndex].clips.removeAll { $0.id == rightClipId }
+        if let idx = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == original.id }) {
+            project.timeline.tracks[trackIndex].clips[idx] = original
+        } else {
+            // If original missing, re-insert.
+            var clips = project.timeline.tracks[trackIndex].clips
+            if clipIndex <= clips.count {
+                clips.insert(original, at: clipIndex)
+            } else {
+                clips.append(original)
+            }
+            project.timeline.tracks[trackIndex].clips = clips
+        }
+    }
 }
 
 private struct ImportAssetCommand: EditorCommand {
@@ -366,6 +589,128 @@ private struct MoveClipCommand: EditorCommand {
         guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
         guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
         project.timeline.tracks[trackIndex].clips[clipIndex].timelineStartSeconds = oldStartSeconds
+    }
+}
+
+private struct MoveClipsCommand: EditorCommand {
+    struct Item: Sendable {
+        let trackId: UUID
+        let clipId: UUID
+        let oldStartSeconds: Double
+        let newStartSeconds: Double
+    }
+
+    let items: [Item]
+
+    var name: String { "Move Clips" }
+
+    func apply(to project: inout Project) {
+        for item in items {
+            guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == item.trackId }) else { continue }
+            guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == item.clipId }) else { continue }
+            project.timeline.tracks[trackIndex].clips[clipIndex].timelineStartSeconds = item.newStartSeconds
+        }
+    }
+
+    func revert(on project: inout Project) {
+        // Reverse order for safety (not strictly required for simple field set).
+        for item in items.reversed() {
+            guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == item.trackId }) else { continue }
+            guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == item.clipId }) else { continue }
+            project.timeline.tracks[trackIndex].clips[clipIndex].timelineStartSeconds = item.oldStartSeconds
+        }
+    }
+}
+
+private struct DeleteClipsCommand: EditorCommand {
+    struct Removed: Sendable {
+        let trackId: UUID
+        let clipIndex: Int
+        let clip: Clip
+    }
+
+    let removed: [Removed]
+
+    var name: String { "Delete Clips" }
+
+    func apply(to project: inout Project) {
+        let ids = Set(removed.map { $0.clip.id })
+        guard !ids.isEmpty else { return }
+
+        for tIndex in project.timeline.tracks.indices {
+            project.timeline.tracks[tIndex].clips.removeAll { ids.contains($0.id) }
+        }
+    }
+
+    func revert(on project: inout Project) {
+        // Re-insert clips per track in ascending index order.
+        let grouped = Dictionary(grouping: removed, by: { $0.trackId })
+        for (trackId, items) in grouped {
+            guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { continue }
+            var clips = project.timeline.tracks[trackIndex].clips
+
+            for item in items.sorted(by: { $0.clipIndex < $1.clipIndex }) {
+                let idx = min(max(0, item.clipIndex), clips.count)
+                clips.insert(item.clip, at: idx)
+            }
+
+            project.timeline.tracks[trackIndex].clips = clips
+        }
+    }
+}
+
+private struct RippleDeleteClipsCommand: EditorCommand {
+    struct Removed: Sendable {
+        let trackId: UUID
+        let clipIndex: Int
+        let clip: Clip
+    }
+
+    struct MoveItem: Sendable {
+        let trackId: UUID
+        let clipId: UUID
+        let oldStartSeconds: Double
+        let newStartSeconds: Double
+    }
+
+    let removed: [Removed]
+    let moves: [MoveItem]
+
+    var name: String { "Ripple Delete Clips" }
+
+    func apply(to project: inout Project) {
+        let removedIds = Set(removed.map { $0.clip.id })
+        if !removedIds.isEmpty {
+            for tIndex in project.timeline.tracks.indices {
+                project.timeline.tracks[tIndex].clips.removeAll { removedIds.contains($0.id) }
+            }
+        }
+
+        for item in moves {
+            guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == item.trackId }) else { continue }
+            guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == item.clipId }) else { continue }
+            project.timeline.tracks[trackIndex].clips[clipIndex].timelineStartSeconds = item.newStartSeconds
+        }
+    }
+
+    func revert(on project: inout Project) {
+        for item in moves.reversed() {
+            guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == item.trackId }) else { continue }
+            guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == item.clipId }) else { continue }
+            project.timeline.tracks[trackIndex].clips[clipIndex].timelineStartSeconds = item.oldStartSeconds
+        }
+
+        // Re-insert removed clips per track in ascending index order.
+        let grouped = Dictionary(grouping: removed, by: { $0.trackId })
+        for (trackId, items) in grouped {
+            guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { continue }
+            var clips = project.timeline.tracks[trackIndex].clips
+            for item in items.sorted(by: { $0.clipIndex < $1.clipIndex }) {
+                let idx = min(max(0, item.clipIndex), clips.count)
+                clips.insert(item.clip, at: idx)
+            }
+            project.timeline.tracks[trackIndex].clips = clips
+        }
     }
 }
 

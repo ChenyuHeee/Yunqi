@@ -51,7 +51,8 @@ private struct CLI {
         parser.ensureFullyConsumed()
 
         let url = URL(fileURLWithPath: projectPath)
-        let project = Project(meta: ProjectMeta(name: name, fps: fps))
+        let defaultTimeline = Timeline(tracks: [Track(kind: .video)])
+        let project = Project(meta: ProjectMeta(name: name, fps: fps), timeline: defaultTimeline)
         try store.save(project, to: url)
         print("Created project: \(url.path)")
     }

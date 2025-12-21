@@ -87,6 +87,11 @@ public actor EditorSession {
         notifyProjectChanged()
     }
 
+    public func moveClips(_ moves: [(clipId: UUID, startSeconds: Double)]) throws {
+        try editor.moveClips(moves)
+        notifyProjectChanged()
+    }
+
     public func trimClip(
         clipId: UUID,
         newTimelineStartSeconds: Double? = nil,
@@ -99,6 +104,26 @@ public actor EditorSession {
             newSourceInSeconds: newSourceInSeconds,
             newDurationSeconds: newDurationSeconds
         )
+        notifyProjectChanged()
+    }
+
+    public func deleteClip(clipId: UUID) throws {
+        try editor.deleteClip(clipId: clipId)
+        notifyProjectChanged()
+    }
+
+    public func deleteClips(clipIds: [UUID]) throws {
+        try editor.deleteClips(clipIds: clipIds)
+        notifyProjectChanged()
+    }
+
+    public func rippleDeleteClips(clipIds: [UUID]) throws {
+        try editor.rippleDeleteClips(clipIds: clipIds)
+        notifyProjectChanged()
+    }
+
+    public func splitClip(clipId: UUID, at timeSeconds: Double) throws {
+        try editor.splitClip(clipId: clipId, at: timeSeconds)
         notifyProjectChanged()
     }
 

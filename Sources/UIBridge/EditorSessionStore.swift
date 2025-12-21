@@ -71,6 +71,10 @@ public final class EditorSessionStore: ObservableObject {
     public func moveClip(clipId: UUID, toStartSeconds: Double) async throws {
         try await session.moveClip(clipId: clipId, toStartSeconds: toStartSeconds)
     }
+    
+    public func moveClips(_ moves: [(clipId: UUID, startSeconds: Double)]) async throws {
+        try await session.moveClips(moves)
+    }
 
     public func trimClip(
         clipId: UUID,
@@ -84,6 +88,22 @@ public final class EditorSessionStore: ObservableObject {
             newSourceInSeconds: newSourceInSeconds,
             newDurationSeconds: newDurationSeconds
         )
+    }
+
+    public func deleteClip(clipId: UUID) async throws {
+        try await session.deleteClip(clipId: clipId)
+    }
+    
+    public func deleteClips(clipIds: [UUID]) async throws {
+        try await session.deleteClips(clipIds: clipIds)
+    }
+
+    public func rippleDeleteClips(clipIds: [UUID]) async throws {
+        try await session.rippleDeleteClips(clipIds: clipIds)
+    }
+
+    public func splitClip(clipId: UUID, at timeSeconds: Double) async throws {
+        try await session.splitClip(clipId: clipId, at: timeSeconds)
     }
 
     public func undo() async {
