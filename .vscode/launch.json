@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:Yunqi}",
+            "name": "Debug YunqiApp",
+            "target": "YunqiApp",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug YunqiApp"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:Yunqi}",
+            "name": "Release YunqiApp",
+            "target": "YunqiApp",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release YunqiApp"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:Yunqi}",
+            "name": "Debug YunqiMacApp",
+            "target": "YunqiMacApp",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug YunqiMacApp"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:Yunqi}",
+            "name": "Release YunqiMacApp",
+            "target": "YunqiMacApp",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release YunqiMacApp"
+        }
+    ]
+}

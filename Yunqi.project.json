@@ -1,0 +1,25 @@
+{
+  "meta" : {
+    "createdAt" : 787929270.009724,
+    "fps" : 30,
+    "name" : "Yunqi Demo"
+  },
+  "timeline" : {
+    "tracks" : [
+      {
+        "clips" : [
+
+        ],
+        "id" : "D1C3D3EA-36DE-45A6-935D-5681BF268FD2",
+        "kind" : "video"
+      },
+      {
+        "clips" : [
+
+        ],
+        "id" : "05688E6D-99EF-4419-8EE8-BCDCC0FE3305",
+        "kind" : "audio"
+      }
+    ]
+  }
+}

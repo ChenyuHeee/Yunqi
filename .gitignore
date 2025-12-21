@@ -1,0 +1,47 @@
+# macOS
+.DS_Store
+
+# SwiftPM
+.build/
+.swiftpm/
+
+# Xcode (如果你用 `swift package generate-xcodeproj` 或打开 Package.swift)
+*.xcodeproj
+*.xcworkspace
+xcuserdata/
+DerivedData/
+
+# Swift/Xcode 临时与索引
+*.swp
+*.swo
+*.tmp
+*.temp
+*.xcuserstate
+*.moved-aside
+*.xccheckout
+*.xcscmblueprint
+
+# Instruments
+*.trace
+
+# VS Code
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# JetBrains
+.idea/
+
+# Coverage / Result Bundles
+*.profraw
+*.profdata
+*.gcda
+*.gcno
+*.lcov
+*.xccovreport
+*.xcresult
+
+# Logs
+*.log

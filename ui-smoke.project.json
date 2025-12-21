@@ -1,0 +1,32 @@
+{
+  "mediaAssets" : [
+    {
+      "id" : "00000000-0000-0000-0000-000000000001",
+      "importedAt" : "2025-12-20T13:27:17Z",
+      "originalPath" : "\/tmp\/video.mp4"
+    }
+  ],
+  "meta" : {
+    "createdAt" : "2025-12-20T13:27:17Z",
+    "fps" : 30,
+    "name" : "UISmoke"
+  },
+  "timeline" : {
+    "tracks" : [
+      {
+        "clips" : [
+          {
+            "assetId" : "00000000-0000-0000-0000-000000000001",
+            "durationSeconds" : 1,
+            "id" : "1C7BECD2-FCD3-424C-A211-F8259813757A",
+            "sourceInSeconds" : 0,
+            "speed" : 1,
+            "timelineStartSeconds" : 0
+          }
+        ],
+        "id" : "0026CE57-FB0C-4168-8330-46FB0A1A17A7",
+        "kind" : "video"
+      }
+    ]
+  }
+}

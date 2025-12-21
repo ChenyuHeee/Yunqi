@@ -1,0 +1,25 @@
+{
+  "mediaAssets" : [
+    {
+      "id" : "329A0299-208E-40A4-B416-48E6DB6D5F90",
+      "importedAt" : "2025-12-20T13:16:27Z",
+      "originalPath" : "\/tmp\/video.mp4"
+    }
+  ],
+  "meta" : {
+    "createdAt" : "2025-12-20T13:16:27Z",
+    "fps" : 30,
+    "name" : "Demo"
+  },
+  "timeline" : {
+    "tracks" : [
+      {
+        "clips" : [
+
+        ],
+        "id" : "80B8E492-1906-444E-8480-E2033A2A937D",
+        "kind" : "video"
+      }
+    ]
+  }
+}
