@@ -20,6 +20,11 @@ final class ProjectWorkspace: ObservableObject {
 
     @Published private(set) var isDirty: Bool = false
 
+    var canUndo: Bool { store.canUndo }
+    var canRedo: Bool { store.canRedo }
+    var undoActionName: String? { store.undoActionName }
+    var redoActionName: String? { store.redoActionName }
+
     @Published var previewTimeSeconds: Double = 0
     @Published var previewDebug: String = ""
     @Published var previewPlayTapCount: Int = 0
@@ -32,6 +37,26 @@ final class ProjectWorkspace: ObservableObject {
     @Published var isExporting: Bool = false
     @Published var exportProgress: Double = 0
     @Published var exportStatusText: String = ""
+
+    // MARK: - Timeline selection (for menu commands)
+
+    @Published var selectedClipIds: Set<UUID> = []
+    @Published var primarySelectedClipId: UUID? = nil
+
+    // MARK: - Timeline range selection (Final Cut-style)
+
+    @Published var rangeInSeconds: Double? = nil
+    @Published var rangeOutSeconds: Double? = nil
+
+    var normalizedRange: (inSeconds: Double, outSeconds: Double)? {
+        guard let a = rangeInSeconds, let b = rangeOutSeconds else { return nil }
+        let lo = max(0, min(a, b))
+        let hi = max(0, max(a, b))
+        if hi - lo < 1e-9 { return nil }
+        return (lo, hi)
+    }
+
+    var hasRangeSelection: Bool { normalizedRange != nil }
 
     private var previewLastFrameAt: Date? = nil
 
@@ -57,6 +82,48 @@ final class ProjectWorkspace: ObservableObject {
         self.lastSavedFingerprint = Self.fingerprint(project)
         self.isDirty = false
         startDirtyTracking()
+    }
+
+    func updateTimelineSelection(selected: Set<UUID>, primary: UUID?) {
+        selectedClipIds = selected
+        primarySelectedClipId = primary
+    }
+
+    func updateTimelineRange(inSeconds: Double?, outSeconds: Double?) {
+        rangeInSeconds = inSeconds
+        rangeOutSeconds = outSeconds
+    }
+
+    func clearTimelineRange() {
+        rangeInSeconds = nil
+        rangeOutSeconds = nil
+    }
+
+    func clearTimelineSelection() {
+        selectedClipIds.removeAll()
+        primarySelectedClipId = nil
+    }
+
+    func selectAllTimelineClips() {
+        let allClips: [Clip] = store.project.timeline.tracks.flatMap { $0.clips }
+        guard !allClips.isEmpty else {
+            clearTimelineSelection()
+            return
+        }
+
+        let ordered = allClips.sorted {
+            if $0.timelineStartSeconds != $1.timelineStartSeconds {
+                return $0.timelineStartSeconds < $1.timelineStartSeconds
+            }
+            return $0.id.uuidString < $1.id.uuidString
+        }
+
+        selectedClipIds = Set(ordered.map { $0.id })
+        if let primary = primarySelectedClipId, selectedClipIds.contains(primary) {
+            // keep
+        } else {
+            primarySelectedClipId = ordered.first?.id
+        }
     }
 
     var windowTitle: String {
@@ -490,6 +557,55 @@ final class ProjectWorkspace: ObservableObject {
 
     func redo() {
         Task { await store.redo() }
+    }
+
+    // MARK: - Clip actions (for menu commands)
+
+    func splitPrimaryClipAtPlayhead() {
+        guard let clipId = primarySelectedClipId else {
+            NSSound.beep()
+            return
+        }
+        let t = previewTimeSeconds
+        Task {
+            do {
+                try await store.splitClip(clipId: clipId, at: t)
+            } catch {
+                NSSound.beep()
+            }
+        }
+    }
+
+    func deleteSelectedClips(ripple: Bool) {
+        let ids: [UUID]
+        if !selectedClipIds.isEmpty {
+            ids = Array(selectedClipIds)
+        } else if let primarySelectedClipId {
+            ids = [primarySelectedClipId]
+        } else {
+            NSSound.beep()
+            return
+        }
+
+        Task {
+            do {
+                if ripple {
+                    try await store.rippleDeleteClips(clipIds: ids)
+                } else {
+                    if ids.count == 1 {
+                        try await store.deleteClip(clipId: ids[0])
+                    } else {
+                        try await store.deleteClips(clipIds: ids)
+                    }
+                }
+
+                // Clear selection to avoid stale IDs after deletion.
+                selectedClipIds.removeAll()
+                primarySelectedClipId = nil
+            } catch {
+                NSSound.beep()
+            }
+        }
     }
 }
 

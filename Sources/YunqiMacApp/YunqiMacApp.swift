@@ -69,18 +69,145 @@ struct YunqiMacApp: App {
                     focusedWorkspace?.presentImportMediaPanel()
                 }
                 .keyboardShortcut("i", modifiers: [.command])
+
+                Button("Export…") {
+                    focusedWorkspace?.presentExportPanel()
+                }
+                .keyboardShortcut("e", modifiers: [.command])
             }
 
             CommandGroup(replacing: .undoRedo) {
-                Button("Undo") {
-                    focusedWorkspace?.undo()
-                }
-                .keyboardShortcut("z", modifiers: [.command])
+                if let ws = focusedWorkspace {
+                    UndoRedoCommands(store: ws.store) {
+                        ws.undo()
+                    } redo: {
+                        ws.redo()
+                    }
+                } else {
+                    Button("Undo") {}
+                        .keyboardShortcut("z", modifiers: [.command])
+                        .disabled(true)
 
-                Button("Redo") {
-                    focusedWorkspace?.redo()
+                    Button("Redo") {}
+                        .keyboardShortcut("z", modifiers: [.command, .shift])
+                        .disabled(true)
                 }
-                .keyboardShortcut("z", modifiers: [.command, .shift])
+            }
+
+            CommandMenu("Playback") {
+                Button("Play/Pause") {
+                    guard let ws = focusedWorkspace else {
+                        NSSound.beep()
+                        return
+                    }
+                    if ws.preview.currentRequestedRate == 0 {
+                        ws.playPreview()
+                    } else {
+                        ws.pausePreview()
+                    }
+                }
+                .keyboardShortcut(.space, modifiers: [])
+
+                Button("Stop") {
+                    focusedWorkspace?.stopPreview()
+                }
+
+                Divider()
+
+                Button("Toggle Loop") {
+                    focusedWorkspace?.isPreviewLooping.toggle()
+                }
+                .keyboardShortcut("l", modifiers: [.command])
+            }
+
+            CommandMenu("Selection") {
+                Button("Select All") {
+                    NSApp.sendAction(#selector(NSResponder.selectAll(_:)), to: nil, from: nil)
+                }
+
+                Button("Deselect") {
+                    NSApp.sendAction(#selector(NSResponder.cancelOperation(_:)), to: nil, from: nil)
+                }
+                .keyboardShortcut(.escape, modifiers: [])
+            }
+
+            CommandMenu("Range") {
+                Button("Set In") {
+                    guard let ws = focusedWorkspace else {
+                        NSSound.beep()
+                        return
+                    }
+                    ws.updateTimelineRange(inSeconds: ws.previewTimeSeconds, outSeconds: ws.rangeOutSeconds)
+                }
+
+                Button("Set Out") {
+                    guard let ws = focusedWorkspace else {
+                        NSSound.beep()
+                        return
+                    }
+                    ws.updateTimelineRange(inSeconds: ws.rangeInSeconds, outSeconds: ws.previewTimeSeconds)
+                }
+
+                Divider()
+
+                Button("Clear Range") {
+                    focusedWorkspace?.clearTimelineRange()
+                }
+                .disabled(!(focusedWorkspace?.hasRangeSelection ?? false))
+
+                Button("Ripple Delete Range") {
+                    guard let ws = focusedWorkspace else {
+                        NSSound.beep()
+                        return
+                    }
+                    guard let r = ws.normalizedRange else {
+                        NSSound.beep()
+                        return
+                    }
+                    Task {
+                        do {
+                            try await ws.store.rippleDeleteRange(inSeconds: r.inSeconds, outSeconds: r.outSeconds)
+                            ws.clearTimelineRange()
+                        } catch {
+                            NSSound.beep()
+                        }
+                    }
+                }
+                .disabled(!(focusedWorkspace?.hasRangeSelection ?? false))
+            }
+
+            CommandMenu("Timeline") {
+                Button("Add Video Track") {
+                    focusedWorkspace?.addVideoTrack()
+                }
+            }
+
+            CommandMenu("Clip") {
+                let selectionCount = focusedWorkspace?.selectedClipIds.count ?? 0
+                let hasPrimary = focusedWorkspace?.primarySelectedClipId != nil
+                let hasSelection = selectionCount > 0 || hasPrimary
+                let deleteTitle = (selectionCount > 1) ? "Delete \(selectionCount) Clips" : "Delete"
+                let rippleTitle = (selectionCount > 1) ? "Ripple Delete \(selectionCount) Clips" : "Ripple Delete"
+
+                Button(hasPrimary ? "Split Clip" : "Split") {
+                    focusedWorkspace?.splitPrimaryClipAtPlayhead()
+                }
+                .keyboardShortcut("b", modifiers: [.command])
+                .disabled(focusedWorkspace?.primarySelectedClipId == nil)
+
+                Divider()
+
+                Button(rippleTitle) {
+                    focusedWorkspace?.deleteSelectedClips(ripple: true)
+                }
+                .keyboardShortcut(.delete, modifiers: [])
+                .disabled(!hasSelection)
+
+                Button(deleteTitle) {
+                    focusedWorkspace?.deleteSelectedClips(ripple: false)
+                }
+                .keyboardShortcut(.delete, modifiers: [.shift])
+                .disabled(!hasSelection)
             }
         }
 
@@ -167,6 +294,36 @@ struct YunqiMacApp: App {
             return true
         }
         return false
+    }
+}
+
+private struct UndoRedoCommands: View {
+    @ObservedObject var store: EditorSessionStore
+    let undo: () -> Void
+    let redo: () -> Void
+
+    var body: some View {
+        let undoTitle = {
+            if let name = store.undoActionName, !name.isEmpty {
+                return "Undo \(name)"
+            }
+            return "Undo"
+        }()
+
+        let redoTitle = {
+            if let name = store.redoActionName, !name.isEmpty {
+                return "Redo \(name)"
+            }
+            return "Redo"
+        }()
+
+        Button(undoTitle, action: undo)
+            .keyboardShortcut("z", modifiers: [.command])
+            .disabled(!store.canUndo)
+
+        Button(redoTitle, action: redo)
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+            .disabled(!store.canRedo)
     }
 }
 
@@ -312,16 +469,6 @@ private struct ContentView: View {
                         .lineLimit(1)
                 }
 
-                Text(String(format: "t=%.2f rate=%.2f taps=%d item=%@",
-                            workspace.previewTimeSeconds,
-                            workspace.preview.player.rate,
-                            workspace.previewPlayTapCount,
-                            workspace.preview.player.currentItem == nil ? "nil" : "set"))
-                    .font(.system(size: 11, weight: .regular, design: .monospaced))
-
-                Text("overlay: \(overlayStatusText) frames: \(workspace.previewFrameCount)")
-                    .font(.system(size: 11, weight: .regular, design: .monospaced))
-
                 Divider()
 
                 Button("+ Video Track") {
@@ -329,10 +476,6 @@ private struct ContentView: View {
                 }
             }
         }
-    }
-
-    private var overlayStatusText: String {
-        (workspace.previewFrameImage == nil) ? "nil" : "set"
     }
 }
 
@@ -671,6 +814,13 @@ private struct TimelineHostView: View {
             project: store.project,
             playheadSeconds: workspace.previewTimeSeconds,
             playerRate: workspace.preview.currentRequestedRate,
+            selectedClipIds: workspace.selectedClipIds,
+            primarySelectedClipId: workspace.primarySelectedClipId,
+            rangeInSeconds: workspace.rangeInSeconds,
+            rangeOutSeconds: workspace.rangeOutSeconds,
+            onSelectionChanged: { selected, primary in
+                workspace.updateTimelineSelection(selected: selected, primary: primary)
+            },
             onMoveClipCommitted: { clipId, newStartSeconds in
                 Task {
                     do {
@@ -752,6 +902,19 @@ private struct TimelineHostView: View {
                     }
                 }
             }
+            ,
+            onRangeChanged: { a, b in
+                workspace.updateTimelineRange(inSeconds: a, outSeconds: b)
+            },
+            onRippleDeleteRangeRequested: { a, b in
+                Task {
+                    do {
+                        try await store.rippleDeleteRange(inSeconds: a, outSeconds: b)
+                    } catch {
+                        NSSound.beep()
+                    }
+                }
+            }
         )
             .background(Color(nsColor: .windowBackgroundColor))
     }
@@ -761,6 +924,11 @@ private struct TimelineRepresentable: NSViewRepresentable {
     let project: Project
     let playheadSeconds: Double
     let playerRate: Float
+    let selectedClipIds: Set<UUID>
+    let primarySelectedClipId: UUID?
+    let rangeInSeconds: Double?
+    let rangeOutSeconds: Double?
+    let onSelectionChanged: (Set<UUID>, UUID?) -> Void
     let onMoveClipCommitted: (UUID, Double) -> Void
     let onMoveClipsCommitted: ([(clipId: UUID, startSeconds: Double)]) -> Void
     let onTrimClipCommitted: (UUID, Double?, Double?, Double?) -> Void
@@ -772,11 +940,14 @@ private struct TimelineRepresentable: NSViewRepresentable {
     let onDeleteClipRequested: (UUID) -> Void
     let onDeleteClipsRequested: ([UUID]) -> Void
     let onRippleDeleteClipsRequested: ([UUID]) -> Void
+    let onRangeChanged: (Double?, Double?) -> Void
+    let onRippleDeleteRangeRequested: (Double, Double) -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator() }
 
     func makeNSView(context: Context) -> NSScrollView {
         let timelineView = TimelineNSView()
+        timelineView.onSelectionChanged = onSelectionChanged
         timelineView.onMoveClipCommitted = onMoveClipCommitted
         timelineView.onMoveClipsCommitted = onMoveClipsCommitted
         timelineView.onTrimClipCommitted = onTrimClipCommitted
@@ -788,6 +959,8 @@ private struct TimelineRepresentable: NSViewRepresentable {
         timelineView.onDeleteClipRequested = onDeleteClipRequested
         timelineView.onDeleteClipsRequested = onDeleteClipsRequested
         timelineView.onRippleDeleteClipsRequested = onRippleDeleteClipsRequested
+        timelineView.onRangeChanged = onRangeChanged
+        timelineView.onRippleDeleteRangeRequested = onRippleDeleteRangeRequested
 
         let scroll = NSScrollView()
         scroll.hasHorizontalScroller = true
@@ -809,6 +982,12 @@ private struct TimelineRepresentable: NSViewRepresentable {
         timelineView.project = project
         timelineView.playheadSeconds = playheadSeconds
         timelineView.playerRate = playerRate
+
+        timelineView.setSelection(selected: selectedClipIds, primary: primarySelectedClipId, notify: false)
+
+        timelineView.setRangeSelection(inSeconds: rangeInSeconds, outSeconds: rangeOutSeconds, notify: false)
+
+        timelineView.onSelectionChanged = onSelectionChanged
         timelineView.onMoveClipCommitted = onMoveClipCommitted
         timelineView.onMoveClipsCommitted = onMoveClipsCommitted
         timelineView.onTrimClipCommitted = onTrimClipCommitted
@@ -820,6 +999,8 @@ private struct TimelineRepresentable: NSViewRepresentable {
         timelineView.onDeleteClipRequested = onDeleteClipRequested
         timelineView.onDeleteClipsRequested = onDeleteClipsRequested
         timelineView.onRippleDeleteClipsRequested = onRippleDeleteClipsRequested
+        timelineView.onRangeChanged = onRangeChanged
+        timelineView.onRippleDeleteRangeRequested = onRippleDeleteRangeRequested
 
         // Expand the document view to fit the timeline content so the user can scroll.
         let visibleWidth = nsView.contentView.bounds.width
@@ -849,6 +1030,7 @@ private final class TimelineNSView: NSView {
     var onMoveClipCommitted: ((UUID, Double) -> Void)?
     var onMoveClipsCommitted: (([(clipId: UUID, startSeconds: Double)]) -> Void)?
     var onTrimClipCommitted: ((UUID, Double?, Double?, Double?) -> Void)?
+    var onSelectionChanged: ((Set<UUID>, UUID?) -> Void)?
     var onScrubBegan: (() -> Void)?
     var onScrubEnded: (() -> Void)?
     var onSeekRequested: ((Double) -> Void)?
@@ -857,9 +1039,30 @@ private final class TimelineNSView: NSView {
     var onDeleteClipRequested: ((UUID) -> Void)?
     var onDeleteClipsRequested: (([UUID]) -> Void)?
     var onRippleDeleteClipsRequested: (([UUID]) -> Void)?
+    var onRangeChanged: ((Double?, Double?) -> Void)?
+    var onRippleDeleteRangeRequested: ((Double, Double) -> Void)?
 
     private var selectedClipIds: Set<UUID> = []
     private var primarySelectedClipId: UUID?
+    
+    func setSelection(selected: Set<UUID>, primary: UUID?, notify: Bool) {
+        selectedClipIds = selected
+        primarySelectedClipId = primary
+        if notify {
+            onSelectionChanged?(selectedClipIds, primarySelectedClipId)
+        }
+        needsDisplay = true
+    }
+
+    func setRangeSelection(inSeconds: Double?, outSeconds: Double?, notify: Bool) {
+        rangeInSeconds = inSeconds
+        rangeOutSeconds = outSeconds
+        rangeDraggingStartSeconds = nil
+        if notify {
+            onRangeChanged?(rangeInSeconds, rangeOutSeconds)
+        }
+        needsDisplay = true
+    }
     private var dragging: DragState?
     private var scrubbing: ScrubState?
     private var scrubPreviewSeconds: Double?
@@ -867,6 +1070,13 @@ private final class TimelineNSView: NSView {
     private var dragPreviewStartSeconds: [UUID: Double] = [:]
     private var dragPreviewDurationSeconds: [UUID: Double] = [:]
     private var dragPreviewSourceInSeconds: [UUID: Double] = [:]
+    private var snapGuideSeconds: Double? = nil
+    private var snappingEnabled: Bool = true
+
+    private var rangeToolEnabled: Bool = false
+    private var rangeInSeconds: Double? = nil
+    private var rangeOutSeconds: Double? = nil
+    private var rangeDraggingStartSeconds: Double? = nil
 
     private enum DragMode {
         case move
@@ -909,6 +1119,23 @@ private final class TimelineNSView: NSView {
         // Double-click on ruler resets zoom.
         if event.clickCount == 2, isPointInTimeRuler(point) {
             resetZoom(anchorPoint: point)
+            needsDisplay = true
+            return
+        }
+
+        // Range selection drag (when tool enabled)
+        if rangeToolEnabled, point.x >= laneX, event.clickCount == 1 {
+            let s = seconds(atX: point.x)
+            rangeDraggingStartSeconds = s
+            rangeInSeconds = s
+            rangeOutSeconds = s
+            onRangeChanged?(rangeInSeconds, rangeOutSeconds)
+
+            // Cancel other interactions
+            dragging = nil
+            scrubbing = nil
+            scrubPreviewSeconds = nil
+            marquee = nil
             needsDisplay = true
             return
         }
@@ -962,6 +1189,8 @@ private final class TimelineNSView: NSView {
             scrubbing = nil
             scrubPreviewSeconds = nil
             marquee = nil
+
+            onSelectionChanged?(selectedClipIds, primarySelectedClipId)
         } else {
             // Double-click empty space: bring playhead into view.
             if event.clickCount == 2, point.x >= laneX {
@@ -978,6 +1207,8 @@ private final class TimelineNSView: NSView {
             dragPreviewStartSeconds.removeAll()
             dragPreviewDurationSeconds.removeAll()
             dragPreviewSourceInSeconds.removeAll()
+
+            onSelectionChanged?(selectedClipIds, primarySelectedClipId)
 
             // 空白区域：优先支持框选；靠近播放头时拖拽视作 scrub。
             if point.x >= laneX {
@@ -1009,6 +1240,16 @@ private final class TimelineNSView: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if let start = rangeDraggingStartSeconds {
+            let point = convert(event.locationInWindow, from: nil)
+            let s = seconds(atX: point.x)
+            rangeInSeconds = start
+            rangeOutSeconds = s
+            onRangeChanged?(rangeInSeconds, rangeOutSeconds)
+            needsDisplay = true
+            return
+        }
+
         if let scrubbing {
             let point = convert(event.locationInWindow, from: nil)
             let s = seconds(atX: point.x)
@@ -1033,6 +1274,8 @@ private final class TimelineNSView: NSView {
                     selectedClipIds = hits
                 }
                 primarySelectedClipId = selectedClipIds.first
+
+                onSelectionChanged?(selectedClipIds, primarySelectedClipId)
             }
             needsDisplay = true
             return
@@ -1042,18 +1285,31 @@ private final class TimelineNSView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         let dx = point.x - dragging.mouseDownPoint.x
         let deltaSeconds = Double(dx / pxPerSecond)
+        let snappingActive = snappingEnabled && !event.modifierFlags.contains(.option)
+        snapGuideSeconds = nil
 
         switch dragging.mode {
         case .move:
+            let movingIds: Set<UUID> = {
+                if dragging.selectedOriginalStarts.isEmpty { return [dragging.clipId] }
+                return Set(dragging.selectedOriginalStarts.keys).union([dragging.clipId])
+            }()
+
+            let proposed = max(0, dragging.originalStartSeconds + deltaSeconds)
+            let snap = snapStartSeconds(
+                proposed,
+                movingClipIds: movingIds,
+                snappingEnabled: snappingActive
+            )
+            let delta = snap.value - dragging.originalStartSeconds
+            snapGuideSeconds = snap.target
+
             if !dragging.selectedOriginalStarts.isEmpty {
                 for (id, start) in dragging.selectedOriginalStarts {
-                    let proposed = start + deltaSeconds
-                    dragPreviewStartSeconds[id] = max(0, proposed)
+                    dragPreviewStartSeconds[id] = max(0, start + delta)
                 }
-            } else {
-                let proposed = dragging.originalStartSeconds + deltaSeconds
-                dragPreviewStartSeconds[dragging.clipId] = max(0, proposed)
             }
+            dragPreviewStartSeconds[dragging.clipId] = max(0, dragging.originalStartSeconds + delta)
 
         case .trimLeft:
             let originalStart = dragging.originalStartSeconds
@@ -1064,6 +1320,14 @@ private final class TimelineNSView: NSView {
             var proposedStart = originalStart + deltaSeconds
             proposedStart = max(0, proposedStart)
             proposedStart = min(proposedStart, endSeconds - minClipDurationSeconds)
+
+            let snap = snapStartSeconds(
+                proposedStart,
+                movingClipIds: [dragging.clipId],
+                snappingEnabled: snappingActive
+            )
+            proposedStart = min(max(0, snap.value), endSeconds - minClipDurationSeconds)
+            snapGuideSeconds = snap.target
 
             let newDuration = max(minClipDurationSeconds, endSeconds - proposedStart)
             let newSourceIn = max(0, originalSourceIn + (proposedStart - originalStart))
@@ -1079,6 +1343,14 @@ private final class TimelineNSView: NSView {
             var proposedEnd = originalEnd + deltaSeconds
             proposedEnd = max(proposedEnd, originalStart + minClipDurationSeconds)
 
+            let snap = snapEndSeconds(
+                proposedEnd,
+                trimmingClipId: dragging.clipId,
+                snappingEnabled: snappingActive
+            )
+            proposedEnd = max(snap.value, originalStart + minClipDurationSeconds)
+            snapGuideSeconds = snap.target
+
             let newDuration = max(minClipDurationSeconds, proposedEnd - originalStart)
             dragPreviewDurationSeconds[dragging.clipId] = newDuration
         }
@@ -1086,6 +1358,12 @@ private final class TimelineNSView: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if rangeDraggingStartSeconds != nil {
+            rangeDraggingStartSeconds = nil
+            needsDisplay = true
+            return
+        }
+
         if scrubbing != nil {
             scrubbing = nil
             scrubPreviewSeconds = nil
@@ -1117,15 +1395,18 @@ private final class TimelineNSView: NSView {
         let point = convert(event.locationInWindow, from: nil)
         let dx = point.x - dragging.mouseDownPoint.x
         let deltaSeconds = Double(dx / pxPerSecond)
+        let snappingActive = snappingEnabled && !event.modifierFlags.contains(.option)
+        snapGuideSeconds = nil
 
         switch dragging.mode {
         case .move:
             let proposed = max(0, dragging.originalStartSeconds + deltaSeconds)
-            let snapped = snapStartSeconds(
-                proposed,
-                trackId: dragging.trackId,
-                movingClipId: dragging.clipId
-            )
+            let movingIds: Set<UUID> = {
+                if dragging.selectedOriginalStarts.isEmpty { return [dragging.clipId] }
+                return Set(dragging.selectedOriginalStarts.keys).union([dragging.clipId])
+            }()
+            let snap = snapStartSeconds(proposed, movingClipIds: movingIds, snappingEnabled: snappingActive)
+            let snapped = snap.value
 
             if abs(snapped - dragging.originalStartSeconds) < 1e-9 {
                 return
@@ -1151,11 +1432,8 @@ private final class TimelineNSView: NSView {
 
             var proposedStart = max(0, originalStart + deltaSeconds)
             proposedStart = min(proposedStart, endSeconds - minClipDurationSeconds)
-            let snappedStart = snapStartSeconds(
-                proposedStart,
-                trackId: dragging.trackId,
-                movingClipId: dragging.clipId
-            )
+            let snap = snapStartSeconds(proposedStart, movingClipIds: [dragging.clipId], snappingEnabled: snappingActive)
+            let snappedStart = snap.value
 
             let clampedStart = min(max(0, snappedStart), endSeconds - minClipDurationSeconds)
             let newDuration = max(minClipDurationSeconds, endSeconds - clampedStart)
@@ -1173,11 +1451,8 @@ private final class TimelineNSView: NSView {
 
             var proposedEnd = (originalEnd + deltaSeconds)
             proposedEnd = max(proposedEnd, originalStart + minClipDurationSeconds)
-            let snappedEnd = snapEndSeconds(
-                proposedEnd,
-                trackId: dragging.trackId,
-                trimmingClipId: dragging.clipId
-            )
+            let snap = snapEndSeconds(proposedEnd, trimmingClipId: dragging.clipId, snappingEnabled: snappingActive)
+            let snappedEnd = snap.value
 
             let clampedEnd = max(snappedEnd, originalStart + minClipDurationSeconds)
             let newDuration = max(minClipDurationSeconds, clampedEnd - originalStart)
@@ -1246,6 +1521,40 @@ private final class TimelineNSView: NSView {
             }
         }
 
+        // Range selection overlay (Final Cut-style): translucent band over the lane area.
+        if let (a, b) = normalizedRange(), let ctx {
+            let x0 = laneX + CGFloat(a) * pxPerSecond
+            let x1 = laneX + CGFloat(b) * pxPerSecond
+            let left = min(x0, x1)
+            let right = max(x0, x1)
+            let w = max(1, right - left)
+
+            let band = CGRect(
+                x: left,
+                y: inset,
+                width: w,
+                height: max(0, bounds.height - inset * 2)
+            )
+
+            ctx.saveGState()
+            // Clip to lane area (exclude track labels).
+            ctx.addRect(CGRect(x: laneX, y: inset, width: bounds.width - laneX, height: max(0, bounds.height - inset)))
+            ctx.clip()
+
+            ctx.setFillColor(NSColor.systemYellow.withAlphaComponent(0.12).cgColor)
+            ctx.fill(band)
+
+            ctx.setStrokeColor(NSColor.systemYellow.withAlphaComponent(0.70).cgColor)
+            ctx.setLineWidth(1)
+            ctx.move(to: CGPoint(x: band.minX + 0.5, y: band.minY))
+            ctx.addLine(to: CGPoint(x: band.minX + 0.5, y: band.maxY))
+            ctx.move(to: CGPoint(x: band.maxX - 0.5, y: band.minY))
+            ctx.addLine(to: CGPoint(x: band.maxX - 0.5, y: band.maxY))
+            ctx.strokePath()
+
+            ctx.restoreGState()
+        }
+
         // Marquee selection rect
         if let marquee, marquee.isActive {
             let rect = selectionRect(from: marquee.startPoint, to: marquee.currentPoint)
@@ -1262,6 +1571,18 @@ private final class TimelineNSView: NSView {
             let line = CGRect(x: x, y: inset, width: 1, height: bounds.height - inset * 2)
             ctx?.setFillColor(NSColor.selectedControlColor.withAlphaComponent(0.85).cgColor)
             ctx?.fill(line)
+        }
+
+        // Snap guide overlay (drawn in timeline area)
+        if let snap = snapGuideSeconds {
+            let gx = laneX + CGFloat(max(0, snap)) * pxPerSecond
+            if gx >= laneX - 2, gx <= bounds.maxX + 2 {
+                ctx?.setStrokeColor(NSColor.systemYellow.withAlphaComponent(0.9).cgColor)
+                ctx?.setLineWidth(1)
+                ctx?.move(to: CGPoint(x: gx, y: inset))
+                ctx?.addLine(to: CGPoint(x: gx, y: bounds.maxY - inset))
+                ctx?.strokePath()
+            }
         }
 
         if project.timeline.tracks.isEmpty {
@@ -1294,6 +1615,28 @@ private final class TimelineNSView: NSView {
 
     override var acceptsFirstResponder: Bool { true }
 
+    override func selectAll(_ sender: Any?) {
+        let ordered = project.timeline.tracks
+            .flatMap { $0.clips }
+            .sorted {
+                if $0.timelineStartSeconds != $1.timelineStartSeconds {
+                    return $0.timelineStartSeconds < $1.timelineStartSeconds
+                }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+
+        setSelection(
+            selected: Set(ordered.map { $0.id }),
+            primary: ordered.first?.id,
+            notify: true
+        )
+    }
+
+    override func cancelOperation(_ sender: Any?) {
+        setSelection(selected: [], primary: nil, notify: true)
+        clearRangeSelection(notify: true)
+    }
+
     override func keyDown(with event: NSEvent) {
         // Cmd +/- zoom
         if event.modifierFlags.contains(.command),
@@ -1312,10 +1655,31 @@ private final class TimelineNSView: NSView {
             }
         }
 
+        // Toggle snapping (Final Cut muscle memory: N)
+        if let chars = event.charactersIgnoringModifiers?.lowercased(), chars == "n" {
+            snappingEnabled.toggle()
+            snapGuideSeconds = nil
+            needsDisplay = true
+            return
+        }
+
+        // Range Selection tool (Final Cut muscle memory: R)
+        if let chars = event.charactersIgnoringModifiers?.lowercased(), chars == "r" {
+            rangeToolEnabled.toggle()
+            rangeDraggingStartSeconds = nil
+            needsDisplay = true
+            return
+        }
+
         // Delete / Ripple Delete
         // Default Delete: ripple delete (NLE-style).
         // Shift+Delete: plain delete (leave gap).
         if event.keyCode == 51 || event.keyCode == 117 {
+            if selectedClipIds.isEmpty, primarySelectedClipId == nil, let (a, b) = normalizedRange() {
+                onRippleDeleteRangeRequested?(a, b)
+                clearRangeSelection(notify: true)
+                return
+            }
             if event.modifierFlags.contains(.shift) {
                 if let primary = primarySelectedClipId, selectedClipIds.count <= 1 {
                     onDeleteClipRequested?(primary)
@@ -1382,6 +1746,15 @@ private final class TimelineNSView: NSView {
                 onSplitClipRequested?(id, t)
                 return
             }
+        case "i":
+            setRangeIn(seconds: playheadSeconds, notify: true)
+            return
+        case "o":
+            setRangeOut(seconds: playheadSeconds, notify: true)
+            return
+        case "x":
+            clearRangeSelection(notify: true)
+            return
         case "j":
             // Reverse (if supported); otherwise acts as a "request".
             onSetPlaybackRateRequested?(nextJKLRate(direction: -1))
@@ -1396,6 +1769,50 @@ private final class TimelineNSView: NSView {
         default:
             super.keyDown(with: event)
         }
+    }
+
+    // MARK: - Range selection helpers
+
+    private func normalizedRange() -> (Double, Double)? {
+        guard let a = rangeInSeconds, let b = rangeOutSeconds else { return nil }
+        let lo = max(0, min(a, b))
+        let hi = max(0, max(a, b))
+        if hi - lo < 1e-9 { return nil }
+        return (lo, hi)
+    }
+
+    private func setRangeIn(seconds: Double, notify: Bool) {
+        rangeInSeconds = seconds
+        if rangeOutSeconds == nil {
+            rangeOutSeconds = seconds
+        }
+        rangeDraggingStartSeconds = nil
+        if notify {
+            onRangeChanged?(rangeInSeconds, rangeOutSeconds)
+        }
+        needsDisplay = true
+    }
+
+    private func setRangeOut(seconds: Double, notify: Bool) {
+        rangeOutSeconds = seconds
+        if rangeInSeconds == nil {
+            rangeInSeconds = seconds
+        }
+        rangeDraggingStartSeconds = nil
+        if notify {
+            onRangeChanged?(rangeInSeconds, rangeOutSeconds)
+        }
+        needsDisplay = true
+    }
+
+    private func clearRangeSelection(notify: Bool) {
+        rangeInSeconds = nil
+        rangeOutSeconds = nil
+        rangeDraggingStartSeconds = nil
+        if notify {
+            onRangeChanged?(nil, nil)
+        }
+        needsDisplay = true
     }
 
     // MARK: - Zoom (Cmd + scroll)
@@ -1970,69 +2387,99 @@ private final class TimelineNSView: NSView {
         return nil
     }
 
-    private func snapStartSeconds(_ proposed: Double, trackId: UUID, movingClipId: UUID) -> Double {
+    private struct SnapResult {
+        let value: Double
+        let target: Double?
+    }
+
+    private func snapStartSeconds(_ proposed: Double, movingClipIds: Set<UUID>, snappingEnabled: Bool) -> SnapResult {
+        guard snappingEnabled else { return SnapResult(value: proposed, target: nil) }
         let thresholdSeconds = Double(snapThresholdPx / pxPerSecond)
 
-        guard let track = project.timeline.tracks.first(where: { $0.id == trackId }) else {
-            return proposed
-        }
-
-        // Snap to 0
         var best = proposed
-        var bestDist = abs(proposed - 0)
-        if bestDist <= thresholdSeconds {
-            best = 0
+        var bestDist = Double.greatestFiniteMagnitude
+        var bestTarget: Double? = nil
+
+        func consider(_ candidate: Double) {
+            let dist = abs(proposed - candidate)
+            if dist < bestDist {
+                bestDist = dist
+                best = candidate
+                bestTarget = candidate
+            }
         }
 
-        // Snap to other clips' start/end.
-        for clip in track.clips where clip.id != movingClipId {
-            let candidates = [
-                clip.timelineStartSeconds,
-                clip.timelineStartSeconds + clip.durationSeconds
-            ]
-            for c in candidates {
-                let dist = abs(proposed - c)
-                if dist < bestDist {
-                    bestDist = dist
-                    best = c
-                }
+        // Snap to 0 / playhead / ruler ticks.
+        consider(0)
+        consider(max(0, playheadSeconds))
+        let minor = timeRulerMinorSpacingSeconds()
+        if minor > 0 {
+            consider((proposed / minor).rounded() * minor)
+        }
+
+        // Snap to other clips' start/end (across all tracks).
+        for track in project.timeline.tracks {
+            for clip in track.clips where !movingClipIds.contains(clip.id) {
+                consider(clip.timelineStartSeconds)
+                consider(clip.timelineStartSeconds + clip.durationSeconds)
             }
         }
 
         if bestDist <= thresholdSeconds {
-            return best
+            return SnapResult(value: best, target: bestTarget)
         }
-        return proposed
+        return SnapResult(value: proposed, target: nil)
     }
 
-    private func snapEndSeconds(_ proposedEnd: Double, trackId: UUID, trimmingClipId: UUID) -> Double {
+    private func snapEndSeconds(_ proposedEnd: Double, trimmingClipId: UUID, snappingEnabled: Bool) -> SnapResult {
+        guard snappingEnabled else { return SnapResult(value: proposedEnd, target: nil) }
         let thresholdSeconds = Double(snapThresholdPx / pxPerSecond)
-
-        guard let track = project.timeline.tracks.first(where: { $0.id == trackId }) else {
-            return proposedEnd
-        }
 
         var best = proposedEnd
         var bestDist = Double.greatestFiniteMagnitude
+        var bestTarget: Double? = nil
 
-        for clip in track.clips where clip.id != trimmingClipId {
-            let candidates = [
-                clip.timelineStartSeconds,
-                clip.timelineStartSeconds + clip.durationSeconds
-            ]
-            for c in candidates {
-                let dist = abs(proposedEnd - c)
-                if dist < bestDist {
-                    bestDist = dist
-                    best = c
-                }
+        func consider(_ candidate: Double) {
+            let dist = abs(proposedEnd - candidate)
+            if dist < bestDist {
+                bestDist = dist
+                best = candidate
+                bestTarget = candidate
+            }
+        }
+
+        // Snap to playhead / ruler ticks.
+        consider(max(0, playheadSeconds))
+        let minor = timeRulerMinorSpacingSeconds()
+        if minor > 0 {
+            consider((proposedEnd / minor).rounded() * minor)
+        }
+
+        // Snap to other clips' start/end (across all tracks).
+        for track in project.timeline.tracks {
+            for clip in track.clips where clip.id != trimmingClipId {
+                consider(clip.timelineStartSeconds)
+                consider(clip.timelineStartSeconds + clip.durationSeconds)
             }
         }
 
         if bestDist <= thresholdSeconds {
-            return best
+            return SnapResult(value: best, target: bestTarget)
         }
-        return proposedEnd
+        return SnapResult(value: proposedEnd, target: nil)
+    }
+
+    private func timeRulerMinorSpacingSeconds() -> Double {
+        let desiredMajorPx: CGFloat = 120
+        let candidateSeconds: [Double] = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 1200]
+        var majorSpacing: Double = 5
+        for s in candidateSeconds {
+            if CGFloat(s) * pxPerSecond >= desiredMajorPx {
+                majorSpacing = s
+                break
+            }
+        }
+        return majorSpacing / 5
     }
 
     // MARK: - Time ruler
@@ -2056,6 +2503,26 @@ private final class TimelineNSView: NSView {
         // Background: keep it very subtle so it doesn't fight clip visuals.
         ctx.setFillColor(NSColor.controlBackgroundColor.withAlphaComponent(0.10).cgColor)
         ctx.fill(rulerRect)
+
+        // Range selection band in ruler (if active)
+        if let (a, b) = normalizedRange() {
+            let x0 = laneX + CGFloat(a) * pxPerSecond
+            let x1 = laneX + CGFloat(b) * pxPerSecond
+            let left = min(x0, x1)
+            let right = max(x0, x1)
+            let w = max(1, right - left)
+            let band = CGRect(x: left, y: rulerRect.minY, width: w, height: rulerRect.height)
+
+            ctx.setFillColor(NSColor.systemYellow.withAlphaComponent(0.10).cgColor)
+            ctx.fill(band)
+            ctx.setStrokeColor(NSColor.systemYellow.withAlphaComponent(0.50).cgColor)
+            ctx.setLineWidth(1)
+            ctx.move(to: CGPoint(x: band.minX + 0.5, y: rulerRect.minY))
+            ctx.addLine(to: CGPoint(x: band.minX + 0.5, y: rulerRect.maxY))
+            ctx.move(to: CGPoint(x: band.maxX - 0.5, y: rulerRect.minY))
+            ctx.addLine(to: CGPoint(x: band.maxX - 0.5, y: rulerRect.maxY))
+            ctx.strokePath()
+        }
 
         // Baseline
         let baselineY: CGFloat = rulerRect.maxY - 0.5
@@ -2125,6 +2592,18 @@ private final class TimelineNSView: NSView {
             caret.closeSubpath()
             ctx.addPath(caret)
             ctx.fillPath()
+        }
+
+        // Snap guide line in ruler (if active)
+        if let snap = snapGuideSeconds {
+            let x = laneX + CGFloat(max(0, snap)) * pxPerSecond
+            if x >= visible.minX - 40, x <= visible.maxX + 40 {
+                ctx.setStrokeColor(NSColor.systemYellow.withAlphaComponent(0.85).cgColor)
+                ctx.setLineWidth(1)
+                ctx.move(to: CGPoint(x: x, y: rulerRect.minY))
+                ctx.addLine(to: CGPoint(x: x, y: rulerRect.maxY))
+                ctx.strokePath()
+            }
         }
 
         ctx.restoreGState()

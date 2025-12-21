@@ -122,6 +122,11 @@ public actor EditorSession {
         notifyProjectChanged()
     }
 
+    public func rippleDeleteRange(inSeconds: Double, outSeconds: Double) {
+        editor.rippleDeleteRange(inSeconds: inSeconds, outSeconds: outSeconds)
+        notifyProjectChanged()
+    }
+
     public func splitClip(clipId: UUID, at timeSeconds: Double) throws {
         try editor.splitClip(clipId: clipId, at: timeSeconds)
         notifyProjectChanged()
@@ -135,6 +140,22 @@ public actor EditorSession {
     public func redo() {
         editor.redo()
         notifyProjectChanged()
+    }
+
+    public func canUndo() -> Bool {
+        editor.canUndo
+    }
+
+    public func canRedo() -> Bool {
+        editor.canRedo
+    }
+
+    public func undoActionName() -> String? {
+        editor.undoActionName
+    }
+
+    public func redoActionName() -> String? {
+        editor.redoActionName
     }
 
     // MARK: - Playback

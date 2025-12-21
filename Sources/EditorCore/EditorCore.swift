@@ -194,6 +194,12 @@ public final class ProjectEditor {
         self.commandStack = CommandStack()
     }
 
+    public var canUndo: Bool { commandStack.canUndo }
+    public var canRedo: Bool { commandStack.canRedo }
+
+    public var undoActionName: String? { commandStack.undoActionName }
+    public var redoActionName: String? { commandStack.redoActionName }
+
     public func execute(_ command: any EditorCommand) {
         commandStack.execute(command, on: &project)
     }
@@ -355,6 +361,89 @@ public final class ProjectEditor {
         }
 
         execute(RippleDeleteClipsCommand(removed: removed, moves: moves))
+    }
+
+    /// Ripple delete a time range across the whole timeline.
+    ///
+    /// The operation is modeled as: split clips at range boundaries (if needed),
+    /// delete clips that fall inside the range, then shift everything after the
+    /// range left by (out - in). Kept as a single undo/redo step.
+    public func rippleDeleteRange(inSeconds: Double, outSeconds: Double) {
+        let lo = max(0, min(inSeconds, outSeconds))
+        let hi = max(0, max(inSeconds, outSeconds))
+        guard hi - lo > 1e-9 else { return }
+
+        let before = project
+        let after = Self.projectByRippleDeletingRange(before, inSeconds: lo, outSeconds: hi)
+        execute(RippleDeleteRangeCommand(before: before, after: after))
+    }
+
+    private static func projectByRippleDeletingRange(_ project: Project, inSeconds: Double, outSeconds: Double) -> Project {
+        let d = outSeconds - inSeconds
+        guard d > 0 else { return project }
+
+        var out = project
+
+        for tIndex in out.timeline.tracks.indices {
+            let oldClips = out.timeline.tracks[tIndex].clips
+            var newClips: [Clip] = []
+            newClips.reserveCapacity(oldClips.count)
+
+            for clip in oldClips {
+                let start = clip.timelineStartSeconds
+                let end = clip.timelineStartSeconds + clip.durationSeconds
+
+                // Fully before range.
+                if end <= inSeconds + 1e-12 {
+                    newClips.append(clip)
+                    continue
+                }
+
+                // Fully after range.
+                if start >= outSeconds - 1e-12 {
+                    var shifted = clip
+                    shifted.timelineStartSeconds = max(0, shifted.timelineStartSeconds - d)
+                    newClips.append(shifted)
+                    continue
+                }
+
+                // Overlap with range: keep the left piece (trim) and/or right piece (split).
+                if start < inSeconds - 1e-12 {
+                    let leftDur = inSeconds - start
+                    if leftDur >= ProjectEditorConstants.minClipDurationSeconds {
+                        var left = clip
+                        left.durationSeconds = leftDur
+                        newClips.append(left)
+                    }
+                }
+
+                if end > outSeconds + 1e-12 {
+                    let rightDur = end - outSeconds
+                    if rightDur >= ProjectEditorConstants.minClipDurationSeconds {
+                        var right = clip
+                        right.id = UUID()
+                        right.timelineStartSeconds = max(0, outSeconds - d)
+
+                        let speed = max(0.0001, clip.speed)
+                        right.sourceInSeconds = clip.sourceInSeconds + (outSeconds - start) * speed
+                        right.durationSeconds = rightDur
+                        newClips.append(right)
+                    }
+                }
+            }
+
+            // Keep deterministic order.
+            newClips.sort {
+                if $0.timelineStartSeconds != $1.timelineStartSeconds {
+                    return $0.timelineStartSeconds < $1.timelineStartSeconds
+                }
+                return $0.id.uuidString < $1.id.uuidString
+            }
+
+            out.timeline.tracks[tIndex].clips = newClips
+        }
+
+        return out
     }
 
     public func splitClip(clipId: UUID, at timeSeconds: Double) throws {
@@ -714,6 +803,21 @@ private struct RippleDeleteClipsCommand: EditorCommand {
     }
 }
 
+private struct RippleDeleteRangeCommand: EditorCommand {
+    let before: Project
+    let after: Project
+
+    var name: String { "Ripple Delete Range" }
+
+    func apply(to project: inout Project) {
+        project = after
+    }
+
+    func revert(on project: inout Project) {
+        project = before
+    }
+}
+
 private struct TrimClipCommand: EditorCommand {
     let trackId: UUID
     let clipId: UUID
@@ -806,6 +910,12 @@ public final class CommandStack {
     private var redoStack: [any EditorCommand] = []
 
     public init() {}
+
+    public var canUndo: Bool { !undoStack.isEmpty }
+    public var canRedo: Bool { !redoStack.isEmpty }
+
+    public var undoActionName: String? { undoStack.last?.name }
+    public var redoActionName: String? { redoStack.last?.name }
 
     public func execute(_ command: any EditorCommand, on project: inout Project) {
         command.apply(to: &project)

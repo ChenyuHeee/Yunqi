@@ -14,6 +14,11 @@ public final class EditorSessionStore: ObservableObject {
     @Published public private(set) var previewImage: CGImage?
     @Published public private(set) var previewTimeSeconds: Double = 0
 
+    @Published public private(set) var canUndo: Bool = false
+    @Published public private(set) var canRedo: Bool = false
+    @Published public private(set) var undoActionName: String? = nil
+    @Published public private(set) var redoActionName: String? = nil
+
     private let session: EditorSession
     private var changesTask: Task<Void, Never>?
 
@@ -27,11 +32,19 @@ public final class EditorSessionStore: ObservableObject {
             let stream = await session.projectChanges()
             for await project in stream {
                 self.project = project
+                self.canUndo = await session.canUndo()
+                self.canRedo = await session.canRedo()
+                self.undoActionName = await session.undoActionName()
+                self.redoActionName = await session.redoActionName()
             }
         }
 
         Task {
             self.project = await session.snapshot()
+            self.canUndo = await session.canUndo()
+            self.canRedo = await session.canRedo()
+            self.undoActionName = await session.undoActionName()
+            self.redoActionName = await session.redoActionName()
         }
     }
 
@@ -100,6 +113,10 @@ public final class EditorSessionStore: ObservableObject {
 
     public func rippleDeleteClips(clipIds: [UUID]) async throws {
         try await session.rippleDeleteClips(clipIds: clipIds)
+    }
+
+    public func rippleDeleteRange(inSeconds: Double, outSeconds: Double) async throws {
+        await session.rippleDeleteRange(inSeconds: inSeconds, outSeconds: outSeconds)
     }
 
     public func splitClip(clipId: UUID, at timeSeconds: Double) async throws {

@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.3.0 (2025-12-21)
+
+第三个测试版本：继续对齐 NLE（Final Cut）手感，新增范围选择与范围波纹删除。
+
+### Highlights
+- Range Selection：R 切换范围工具；拖拽设置范围；I/O 设 In/Out；X 清除范围
+- Ripple Delete Range：在无 clip 选中时 Delete 可对范围执行一次 Undo 的波纹删除
+- Snapping 体验补齐：N 切换吸附开关；Option 临时关闭；吸附提示线覆盖标尺与时间线
+- 菜单补齐：新增 Range 菜单（Set In/Out、Clear、Ripple Delete Range）
+
+### Notes
+- 仍为测试版：导出与素材兼容性、性能与稳定性会继续迭代。
+
+### 安装与运行
+- 这是未签名/未公证的测试构建，macOS 可能提示“无法验证开发者”。
+- 下载 Release 里的 `Yunqi-<tag>-macos.zip`，解压后在终端运行：`./YunqiMacApp`
+
 ## v0.2.0 (2025-12-21)
 
 第二个测试版本，补齐高频剪辑交互与多工程工作流。
