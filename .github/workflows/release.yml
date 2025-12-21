@@ -1,0 +1,77 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Swift toolchain info
+        run: |
+          swift --version
+
+      - name: Test
+        run: |
+          swift test
+
+      - name: Build (release)
+        run: |
+          swift build -c release --product YunqiMacApp
+
+      - name: Package artifact
+        run: |
+          set -euo pipefail
+
+          TAG_NAME="${GITHUB_REF_NAME}"
+          ROOT_DIR="$PWD"
+          OUT_DIR="$ROOT_DIR/dist/$TAG_NAME"
+
+          mkdir -p "$OUT_DIR"
+
+          # Binary
+          cp "$ROOT_DIR/.build/release/YunqiMacApp" "$OUT_DIR/"
+
+          # Docs
+          [ -f "$ROOT_DIR/README.md" ] && cp "$ROOT_DIR/README.md" "$OUT_DIR/" || true
+          [ -f "$ROOT_DIR/README.en.md" ] && cp "$ROOT_DIR/README.en.md" "$OUT_DIR/" || true
+          [ -f "$ROOT_DIR/CHANGELOG.md" ] && cp "$ROOT_DIR/CHANGELOG.md" "$OUT_DIR/" || true
+
+          # Sample project (optional)
+          [ -f "$ROOT_DIR/demo.project.json" ] && cp "$ROOT_DIR/demo.project.json" "$OUT_DIR/" || true
+
+          # Zip
+          cd "$ROOT_DIR/dist"
+          zip -r "Yunqi-${TAG_NAME}-macos.zip" "$TAG_NAME"
+
+          # Checksums
+          shasum -a 256 "Yunqi-${TAG_NAME}-macos.zip" > "Yunqi-${TAG_NAME}-macos.zip.sha256"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: true
+          generate_release_notes: false
+          body: |
+            Test release: ${{ github.ref_name }}
+
+            See CHANGELOG.md for details.
+
+      - name: Upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/Yunqi-${{ github.ref_name }}-macos.zip
+            dist/Yunqi-${{ github.ref_name }}-macos.zip.sha256

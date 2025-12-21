@@ -3,6 +3,7 @@
 面向 **Apple Silicon** 优化的 macOS 视频剪辑工具：专注“顺滑预览 + 高效时间线编辑”，让剪辑更轻、更快、更直觉。
 
 - English: [README.en.md](README.en.md)
+- 更新记录： [CHANGELOG.md](CHANGELOG.md)
 
 ---
 
