@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.4.0 (2025-12-22)
+
+第四个测试版本：对齐 Final Cut 的 Blade 语义，并完成 macOS App 形态的本地化（含系统菜单）与图标集成。
+
+### Highlights
+- Blade / Blade All：⌘B（优先切所选片段；无选择时切 playhead 命中片段），⇧⌘B（全轨切刀）；一次操作一次 Undo/Redo
+- 本地化（中/英）：菜单与主要 UI 文案补齐；简体中文系统下可正确显示中文系统菜单
+- App 名称与图标：中文显示“云起”；集成 App Icon（SVG → icns）并打进 `.app`
+- 文档展示：README 增加 logo、badges、Insights 图表卡片
+
+### Notes
+- 仍为测试版：导出与素材兼容性、性能与稳定性会继续迭代。
+
+### 安装与运行
+- 这是未签名/未公证的测试构建，macOS 可能提示“无法验证开发者”。
+- 下载 Release 里的 `Yunqi-<tag>-macos.zip`，解压后打开 `YunqiMacApp.app`（或在终端执行 `open YunqiMacApp.app`）。
+
 ## v0.3.0 (2025-12-21)
 
 第三个测试版本：继续对齐 NLE（Final Cut）手感，新增范围选择与范围波纹删除。

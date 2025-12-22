@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="120" y1="120" x2="920" y2="920" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F3F6FF"/>
+      <stop offset="0.55" stop-color="#EAF2FF"/>
+      <stop offset="1" stop-color="#E6FAF7"/>
+    </linearGradient>
+    <linearGradient id="aurora" x1="220" y1="220" x2="820" y2="820" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8B5CF6"/>
+      <stop offset="0.50" stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#22C55E"/>
+    </linearGradient>
+
+    <filter id="glow" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="8" result="b"/>
+      <feColorMatrix in="b" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 0.28 0" result="g"/>
+      <feMerge>
+        <feMergeNode in="g"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <filter id="plateShadow" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#0F172A" flood-opacity="0.14"/>
+      <feDropShadow dx="0" dy="2" stdDeviation="4" flood-color="#0F172A" flood-opacity="0.10"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect x="72" y="72" width="880" height="880" rx="196" fill="url(#bg)"/>
+
+  <!-- Timeline rails (translucent plate) -->
+  <g filter="url(#plateShadow)">
+    <rect x="190" y="356" width="644" height="312" rx="72" fill="#FFFFFF" opacity="0.68" stroke="#0F172A" stroke-opacity="0.10" stroke-width="2"/>
+    <rect x="214" y="380" width="596" height="264" rx="60" fill="#FFFFFF" opacity="0.50" stroke="#0F172A" stroke-opacity="0.08" stroke-width="2"/>
+  </g>
+
+  <!-- "云": very subtle cloud watermark on the plate -->
+  <g opacity="0.20">
+    <path d="M352 430c24 0 44-17 44-38 0-19-15-35-36-38-4-29-31-52-64-52-28 0-52 16-61 39-2 0-4-1-6-1-27 0-50 18-50 43 0 24 22 47 61 47h112Z" fill="url(#aurora)"/>
+  </g>
+
+  <!-- Clips (rounded blocks) -->
+  <g opacity="0.95">
+    <rect x="246" y="420" width="190" height="86" rx="26" fill="#0F172A" opacity="0.10"/>
+    <rect x="458" y="420" width="316" height="86" rx="26" fill="#0F172A" opacity="0.12"/>
+
+    <rect x="246" y="538" width="268" height="86" rx="26" fill="#0F172A" opacity="0.09"/>
+    <rect x="534" y="538" width="240" height="86" rx="26" fill="#0F172A" opacity="0.11"/>
+  </g>
+
+  <!-- Playhead / cut line with "起" hint -->
+  <g filter="url(#glow)">
+    <rect x="502" y="338" width="20" height="404" rx="10" fill="url(#aurora)"/>
+    <rect x="476" y="304" width="72" height="44" rx="22" fill="url(#aurora)"/>
+
+    <!-- "起": tiny up glyph inside the capsule (kept subtle) -->
+    <path d="M512 316c-6 0-10 4-10 10v8h-6c-4 0-8 3-8 8s4 8 8 8h32c4 0 8-3 8-8s-4-8-8-8h-6v-8c0-6-4-10-10-10Z" fill="#FFFFFF" opacity="0.55"/>
+    <path d="M512 312l-14 14c-3 3-3 8 0 11 3 3 8 3 11 0l3-3 3 3c3 3 8 3 11 0 3-3 3-8 0-11l-14-14Z" fill="#FFFFFF" opacity="0.55"/>
+  </g>
+</svg>

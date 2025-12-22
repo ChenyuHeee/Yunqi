@@ -27,6 +27,14 @@ final class ProjectWorkspace: ObservableObject {
 
     @Published var previewTimeSeconds: Double = 0
     @Published var previewDebug: String = ""
+
+    // MARK: - Timeline display
+
+    @Published var isAudioComponentsExpanded: Bool = true
+
+    func toggleAudioComponentsExpanded() {
+        isAudioComponentsExpanded.toggle()
+    }
     @Published var previewPlayTapCount: Int = 0
     @Published var previewFrameImage: CGImage? = nil
     @Published var previewFrameCount: Int = 0
@@ -74,7 +82,7 @@ final class ProjectWorkspace: ObservableObject {
     init(projectStore: ProjectStore = JSONProjectStore()) {
         self.projectStore = projectStore
 
-        let project = Self.makeDefaultProject(name: "Yunqi", fps: 30)
+        let project = Self.makeDefaultProject(name: L("app.name"), fps: 30)
         let session = EditorSession(project: project)
         self.store = EditorSessionStore(session: session)
         self.projectURL = nil
@@ -130,12 +138,12 @@ final class ProjectWorkspace: ObservableObject {
         if let projectURL {
             return projectURL.lastPathComponent
         }
-        return "Yunqi"
+        return L("app.name")
     }
 
     // MARK: - File
 
-    func newProject(name: String = "Yunqi", fps: Double = 30) {
+    func newProject(name: String = L("app.name"), fps: Double = 30) {
         let project = Self.makeDefaultProject(name: name, fps: fps)
         let session = EditorSession(project: project)
         self.store = EditorSessionStore(session: session)
@@ -456,7 +464,7 @@ final class ProjectWorkspace: ObservableObject {
         }
         isExporting = true
         exportProgress = 0
-        exportStatusText = "Exporting…"
+        exportStatusText = L("status.exporting")
 
         do {
             try await preview.export(
@@ -471,10 +479,10 @@ final class ProjectWorkspace: ObservableObject {
                 }
             )
             exportProgress = 1
-            exportStatusText = "Exported: \(url.lastPathComponent)"
+            exportStatusText = String(format: L("status.exported"), url.lastPathComponent)
             NSLog("[Export] Completed: %@", url.path)
         } catch {
-            exportStatusText = "Export failed: \(error.localizedDescription)"
+            exportStatusText = String(format: L("status.exportFailed"), error.localizedDescription)
             NSLog("[Export] Failed: %@", String(describing: error))
             NSSound.beep()
         }
@@ -488,20 +496,41 @@ final class ProjectWorkspace: ObservableObject {
         Task { await store.addTrack(kind: .video) }
     }
 
+    func addAudioTrack() {
+        Task { await store.addTrack(kind: .audio) }
+    }
+
     func addAssetToTimeline(assetId: UUID, preferredDurationSeconds: Double = 3.0) {
-        Task {
-            // Ensure there is at least one video track.
-            if !store.project.timeline.tracks.contains(where: { $0.kind == .video }) {
-                await store.addTrack(kind: .video)
-            }
+        addAssetToTimeline(assetId: assetId, at: nil, targetTrackIndex: nil, preferredDurationSeconds: preferredDurationSeconds)
+    }
 
-            guard let videoTrackIndex = store.project.timeline.tracks.firstIndex(where: { $0.kind == .video }) else {
-                return
-            }
+    func addAssetToTimeline(
+        assetId: UUID,
+        at timelineStartSeconds: Double?,
+        targetTrackIndex: Int?,
+        preferredDurationSeconds: Double = 3.0
+    ) {
+        Task { @MainActor in
+            // Decide target track kind based on the asset.
+            var targetKind: TrackKind = .video
+            if let record = store.project.mediaAssets.first(where: { $0.id == assetId }) {
+                let url = URL(fileURLWithPath: record.originalPath)
+                let asset = AVURLAsset(url: url)
 
-            // Append at end of that track.
-            let clips = store.project.timeline.tracks[videoTrackIndex].clips
-            let endTime = clips.map { $0.timelineStartSeconds + $0.durationSeconds }.max() ?? 0
+                // IMPORTANT: be conservative. Only treat as audio-only when we can *successfully* confirm
+                // there is no video track but there is audio. If probing video tracks fails, keep default .video.
+                do {
+                    let videoTracks = try await asset.loadTracks(withMediaType: .video)
+                    if videoTracks.isEmpty {
+                        let audioTracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
+                        if !audioTracks.isEmpty {
+                            targetKind = .audio
+                        }
+                    }
+                } catch {
+                    // Keep .video (default) on probe failures.
+                }
+            }
 
             // Prefer using full asset duration if available.
             var durationSeconds = preferredDurationSeconds
@@ -535,11 +564,86 @@ final class ProjectWorkspace: ObservableObject {
                 }
             }
 
+            // Work off a stable snapshot. NOTE: EditorSessionStore.project updates via an async stream,
+            // so we must not rely on it being updated immediately after await store.addTrack.
+            var tracks = store.project.timeline.tracks
+
+            func overlaps(_ startSeconds: Double, _ durationSeconds: Double, in track: Track) -> Bool {
+                let eps = 1e-9
+                let a0 = startSeconds
+                let a1 = startSeconds + max(0, durationSeconds)
+                for c in track.clips {
+                    let b0 = c.timelineStartSeconds
+                    let b1 = c.timelineStartSeconds + c.durationSeconds
+                    if a0 < b1 - eps && a1 > b0 + eps { return true }
+                }
+                return false
+            }
+
+            // Ensure there is at least one track of the target kind.
+            if !tracks.contains(where: { $0.kind == targetKind }) {
+                await store.addTrack(kind: targetKind)
+                // Mirror the structural change locally (empty track) for subsequent decisions.
+                tracks.append(Track(kind: targetKind))
+            }
+
+            // Decide which track to place the NEW clip on.
+            var chosenTrackIndex: Int = 0
+
+            let candidates = tracks.indices.filter { tracks[$0].kind == targetKind }
+            let firstSameKind = candidates.first ?? 0
+
+            if let t0 = timelineStartSeconds {
+                let start = max(0, t0)
+
+                if
+                    let targetTrackIndex,
+                    tracks.indices.contains(targetTrackIndex),
+                    tracks[targetTrackIndex].kind == targetKind
+                {
+                    if !overlaps(start, durationSeconds, in: tracks[targetTrackIndex]) {
+                        chosenTrackIndex = targetTrackIndex
+                    } else if let idx = candidates.first(where: { $0 != targetTrackIndex && !overlaps(start, durationSeconds, in: tracks[$0]) }) {
+                        chosenTrackIndex = idx
+                    } else {
+                        let newIndex = tracks.count
+                        await store.addTrack(kind: targetKind)
+                        tracks.append(Track(kind: targetKind))
+                        chosenTrackIndex = newIndex
+                    }
+                } else if let idx = candidates.first(where: { !overlaps(start, durationSeconds, in: tracks[$0]) }) {
+                    chosenTrackIndex = idx
+                } else {
+                    let newIndex = tracks.count
+                    await store.addTrack(kind: targetKind)
+                    tracks.append(Track(kind: targetKind))
+                    chosenTrackIndex = newIndex
+                }
+            } else if
+                let targetTrackIndex,
+                tracks.indices.contains(targetTrackIndex),
+                tracks[targetTrackIndex].kind == targetKind
+            {
+                chosenTrackIndex = targetTrackIndex
+            } else {
+                chosenTrackIndex = firstSameKind
+            }
+
+            let finalStartSeconds: Double = {
+                if let timelineStartSeconds { return max(0, timelineStartSeconds) }
+                // Append at end of chosen track (based on snapshot).
+                if tracks.indices.contains(chosenTrackIndex) {
+                    let clips = tracks[chosenTrackIndex].clips
+                    return clips.map { $0.timelineStartSeconds + $0.durationSeconds }.max() ?? 0
+                }
+                return 0
+            }()
+
             do {
                 try await store.addClip(
-                    trackIndex: videoTrackIndex,
+                    trackIndex: chosenTrackIndex,
                     assetId: assetId,
-                    timelineStartSeconds: endTime,
+                    timelineStartSeconds: finalStartSeconds,
                     sourceInSeconds: 0,
                     durationSeconds: durationSeconds,
                     speed: 1.0
@@ -559,14 +663,120 @@ final class ProjectWorkspace: ObservableObject {
         Task { await store.redo() }
     }
 
-    // MARK: - Clip actions (for menu commands)
+    // MARK: - Asset actions (for sidebar)
 
-    func splitPrimaryClipAtPlayhead() {
-        guard let clipId = primarySelectedClipId else {
+    func renameAsset(assetId: UUID, displayName: String) {
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
             NSSound.beep()
             return
         }
+
+        Task {
+            do {
+                try await store.renameAsset(assetId: assetId, displayName: trimmed)
+            } catch {
+                NSSound.beep()
+            }
+        }
+    }
+
+    // MARK: - Clip actions (for menu commands)
+
+    var canAdjustClipVolumeAtPlayhead: Bool {
+        clipIdForPrimaryOrPlayhead(timeSeconds: previewTimeSeconds) != nil
+    }
+
+    func adjustClipVolumeAtPlayhead(delta: Double) {
         let t = previewTimeSeconds
+        guard let clipId = clipIdForPrimaryOrPlayhead(timeSeconds: t) else {
+            NSSound.beep()
+            return
+        }
+
+        let current = clipVolume(clipId: clipId) ?? 1.0
+        let next = max(0, min(2.0, current + delta))
+
+        Task {
+            do {
+                try await store.setClipVolume(clipId: clipId, volume: next)
+            } catch {
+                NSSound.beep()
+            }
+        }
+    }
+
+    var canToggleAudioTrackMuteSolo: Bool {
+        targetTrackIdForPrimaryOrPlayhead(timeSeconds: previewTimeSeconds) != nil
+    }
+
+    func toggleMuteForTargetTrack() {
+        let t = previewTimeSeconds
+        guard let trackId = targetTrackIdForPrimaryOrPlayhead(timeSeconds: t) else {
+            NSSound.beep()
+            return
+        }
+        Task {
+            do {
+                try await store.toggleTrackMute(trackId: trackId)
+            } catch {
+                NSSound.beep()
+            }
+        }
+    }
+
+    func toggleSoloForTargetTrack() {
+        let t = previewTimeSeconds
+        guard let trackId = targetTrackIdForPrimaryOrPlayhead(timeSeconds: t) else {
+            NSSound.beep()
+            return
+        }
+        Task {
+            do {
+                try await store.toggleTrackSolo(trackId: trackId)
+            } catch {
+                NSSound.beep()
+            }
+        }
+    }
+
+    var canSplitAtPlayhead: Bool {
+        let t = previewTimeSeconds
+
+        // If there is a selection, allow blade if any selected clip can be split at the playhead.
+        let selected = selectedClipIds.union(primarySelectedClipId.map { [$0] } ?? [])
+        if !selected.isEmpty {
+            for id in selected {
+                if canSplitClip(clipId: id, at: t) { return true }
+            }
+            return false
+        }
+
+        // No selection: allow blade if there is any clip under the playhead.
+        return clipIdIntersectingPlayhead(timeSeconds: t) != nil
+    }
+
+    /// Final Cut-style Blade (Cmd+B): blade selection if any; otherwise blade the clip under playhead.
+    func bladeAtPlayhead() {
+        let t = previewTimeSeconds
+
+        let selected = selectedClipIds.union(primarySelectedClipId.map { [$0] } ?? [])
+        if !selected.isEmpty {
+            let eligible = selected.filter { canSplitClip(clipId: $0, at: t) }
+            guard !eligible.isEmpty else {
+                NSSound.beep()
+                return
+            }
+            Task {
+                await store.splitClips(clipIds: Array(eligible), at: t)
+            }
+            return
+        }
+
+        guard let clipId = clipIdIntersectingPlayhead(timeSeconds: t) else {
+            NSSound.beep()
+            return
+        }
         Task {
             do {
                 try await store.splitClip(clipId: clipId, at: t)
@@ -574,6 +784,94 @@ final class ProjectWorkspace: ObservableObject {
                 NSSound.beep()
             }
         }
+    }
+
+    /// Final Cut-style Blade All (Shift+Cmd+B): blade every clip on every track that intersects playhead.
+    func bladeAllAtPlayhead() {
+        let t = previewTimeSeconds
+        var ids: [UUID] = []
+        for track in store.project.timeline.tracks {
+            for clip in track.clips {
+                let start = clip.timelineStartSeconds
+                let end = start + clip.durationSeconds
+                if t > start, t < end {
+                    ids.append(clip.id)
+                }
+            }
+        }
+        guard !ids.isEmpty else {
+            NSSound.beep()
+            return
+        }
+        Task {
+            await store.splitClips(clipIds: ids, at: t)
+        }
+    }
+
+    private func canSplitClip(clipId: UUID, at timeSeconds: Double) -> Bool {
+        for track in store.project.timeline.tracks {
+            if let clip = track.clips.first(where: { $0.id == clipId }) {
+                let start = clip.timelineStartSeconds
+                let end = start + clip.durationSeconds
+                // Match EditorCore: must split strictly inside clip bounds.
+                return timeSeconds > start && timeSeconds < end
+            }
+        }
+        return false
+    }
+
+    private func clipIdForPrimaryOrPlayhead(timeSeconds t: Double) -> UUID? {
+        if let primarySelectedClipId { return primarySelectedClipId }
+        for track in store.project.timeline.tracks {
+            for clip in track.clips {
+                let start = clip.timelineStartSeconds
+                let end = start + clip.durationSeconds
+                guard t >= start, t <= end else { continue }
+                return clip.id
+            }
+        }
+        return nil
+    }
+
+    private func targetTrackIdForPrimaryOrPlayhead(timeSeconds t: Double) -> UUID? {
+        if let primarySelectedClipId {
+            for track in store.project.timeline.tracks {
+                if track.clips.contains(where: { $0.id == primarySelectedClipId }) {
+                    return track.id
+                }
+            }
+        }
+        for track in store.project.timeline.tracks {
+            for clip in track.clips {
+                let start = clip.timelineStartSeconds
+                let end = start + clip.durationSeconds
+                guard t >= start, t <= end else { continue }
+                return track.id
+            }
+        }
+        return nil
+    }
+
+    private func clipVolume(clipId: UUID) -> Double? {
+        for track in store.project.timeline.tracks {
+            if let clip = track.clips.first(where: { $0.id == clipId }) {
+                return clip.volume
+            }
+        }
+        return nil
+    }
+
+    private func clipIdIntersectingPlayhead(timeSeconds t: Double) -> UUID? {
+        for track in store.project.timeline.tracks {
+            for clip in track.clips {
+                let start = clip.timelineStartSeconds
+                let end = start + clip.durationSeconds
+                // Match EditorCore: must split strictly inside clip bounds.
+                guard t > start, t < end else { continue }
+                return clip.id
+            }
+        }
+        return nil
     }
 
     func deleteSelectedClips(ripple: Bool) {

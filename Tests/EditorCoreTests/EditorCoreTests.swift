@@ -50,6 +50,26 @@ final class EditorCoreTests: XCTestCase {
         XCTAssertEqual(editor.project.timeline.tracks[0].clips.count, 1)
     }
 
+    func testProjectEditorRenameAssetUndoRedoAndDefaultName() throws {
+        let editor = ProjectEditor(project: Project(meta: ProjectMeta(name: "Demo")))
+        let assetId = editor.importAsset(path: "/tmp/video.mp4")
+
+        let imported = try XCTUnwrap(editor.project.mediaAssets.first(where: { $0.id == assetId }))
+        XCTAssertEqual(imported.displayName, "video.mp4")
+
+        try editor.renameAsset(assetId: assetId, displayName: "Interview A")
+        let renamed = try XCTUnwrap(editor.project.mediaAssets.first(where: { $0.id == assetId }))
+        XCTAssertEqual(renamed.displayName, "Interview A")
+
+        editor.undo()
+        let undone = try XCTUnwrap(editor.project.mediaAssets.first(where: { $0.id == assetId }))
+        XCTAssertEqual(undone.displayName, "video.mp4")
+
+        editor.redo()
+        let redone = try XCTUnwrap(editor.project.mediaAssets.first(where: { $0.id == assetId }))
+        XCTAssertEqual(redone.displayName, "Interview A")
+    }
+
     func testProjectEditorMoveClipUndoRedo() throws {
         let editor = ProjectEditor(project: Project(meta: ProjectMeta(name: "Demo")))
         let assetId = editor.importAsset(path: "/tmp/video.mp4")
@@ -142,6 +162,81 @@ final class EditorCoreTests: XCTestCase {
         try editor.trimClip(clipId: clipId, newDurationSeconds: 0)
         clipAfter = try XCTUnwrap(editor.project.timeline.tracks[0].clips.first)
         XCTAssertGreaterThan(clipAfter.durationSeconds, 0)
+    }
+
+    func testProjectEditorSetClipVolumeUndoRedo() throws {
+        let editor = ProjectEditor(project: Project(meta: ProjectMeta(name: "Demo")))
+        let assetId = editor.importAsset(path: "/tmp/video.mp4")
+        editor.addTrack(kind: .video)
+        try editor.addClip(trackIndex: 0, assetId: assetId, timelineStartSeconds: 0, sourceInSeconds: 0, durationSeconds: 1)
+        let clipId = try XCTUnwrap(editor.project.timeline.tracks[0].clips.first?.id)
+
+        // Default volume is 1.0
+        XCTAssertEqual(editor.project.timeline.tracks[0].clips[0].volume, 1.0, accuracy: 1e-9)
+
+        try editor.setClipVolume(clipId: clipId, volume: 0.5)
+        XCTAssertEqual(editor.project.timeline.tracks[0].clips[0].volume, 0.5, accuracy: 1e-9)
+
+        editor.undo()
+        XCTAssertEqual(editor.project.timeline.tracks[0].clips[0].volume, 1.0, accuracy: 1e-9)
+
+        editor.redo()
+        XCTAssertEqual(editor.project.timeline.tracks[0].clips[0].volume, 0.5, accuracy: 1e-9)
+    }
+
+    func testProjectEditorToggleTrackMuteSoloUndoRedo() throws {
+        let editor = ProjectEditor(project: Project(meta: ProjectMeta(name: "Demo")))
+        editor.addTrack(kind: .video)
+        editor.addTrack(kind: .audio)
+        let trackA = editor.project.timeline.tracks[0]
+        let trackB = editor.project.timeline.tracks[1]
+
+        XCTAssertFalse(trackA.isMuted)
+        XCTAssertFalse(trackA.isSolo)
+
+        try editor.toggleTrackMute(trackId: trackA.id)
+        XCTAssertTrue(editor.project.timeline.tracks[0].isMuted)
+        editor.undo()
+        XCTAssertFalse(editor.project.timeline.tracks[0].isMuted)
+        editor.redo()
+        XCTAssertTrue(editor.project.timeline.tracks[0].isMuted)
+
+        try editor.toggleTrackSolo(trackId: trackB.id)
+        XCTAssertTrue(editor.project.timeline.tracks[1].isSolo)
+        editor.undo()
+        XCTAssertFalse(editor.project.timeline.tracks[1].isSolo)
+        editor.redo()
+        XCTAssertTrue(editor.project.timeline.tracks[1].isSolo)
+    }
+
+    func testMoveClipAutoLanesToNewTrackOnOverlapUndoRedo() throws {
+        let editor = ProjectEditor(project: Project(meta: ProjectMeta(name: "Demo")))
+        let assetId = editor.importAsset(path: "/tmp/video.mp4")
+        editor.addTrack(kind: .video)
+
+        // Clip A: [0, 5)
+        try editor.addClip(trackIndex: 0, assetId: assetId, timelineStartSeconds: 0, sourceInSeconds: 0, durationSeconds: 5, speed: 1)
+        // Clip B: [6, 8)
+        try editor.addClip(trackIndex: 0, assetId: assetId, timelineStartSeconds: 6, sourceInSeconds: 0, durationSeconds: 2, speed: 1)
+        let clipBId = try XCTUnwrap(editor.project.timeline.tracks[0].clips.last?.id)
+
+        // Move B to start at 3s -> overlaps Clip A -> should auto-lane to a new video track.
+        try editor.moveClip(clipId: clipBId, toStartSeconds: 3)
+
+        XCTAssertEqual(editor.project.timeline.tracks.count, 2)
+        XCTAssertEqual(editor.project.timeline.tracks[1].kind, .video)
+        let moved = try XCTUnwrap(editor.project.timeline.tracks[1].clips.first(where: { $0.id == clipBId }))
+        XCTAssertEqual(moved.timelineStartSeconds, 3, accuracy: 1e-9)
+
+        editor.undo()
+        XCTAssertEqual(editor.project.timeline.tracks.count, 1)
+        let undone = try XCTUnwrap(editor.project.timeline.tracks[0].clips.first(where: { $0.id == clipBId }))
+        XCTAssertEqual(undone.timelineStartSeconds, 6, accuracy: 1e-9)
+
+        editor.redo()
+        XCTAssertEqual(editor.project.timeline.tracks.count, 2)
+        let redone = try XCTUnwrap(editor.project.timeline.tracks[1].clips.first(where: { $0.id == clipBId }))
+        XCTAssertEqual(redone.timelineStartSeconds, 3, accuracy: 1e-9)
     }
 
     func testProjectEditorAddClipMissingAssetThrows() {

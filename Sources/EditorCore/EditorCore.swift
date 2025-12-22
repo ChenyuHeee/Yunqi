@@ -28,12 +28,52 @@ public struct Project: Codable, Sendable {
 public struct MediaAssetRecord: Codable, Sendable {
     public var id: UUID
     public var originalPath: String
+    public var displayName: String
     public var importedAt: Date
 
-    public init(id: UUID = UUID(), originalPath: String, importedAt: Date = Date()) {
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case originalPath
+        case displayName
+        case importedAt
+    }
+
+    public init(id: UUID = UUID(), originalPath: String, displayName: String? = nil, importedAt: Date = Date()) {
         self.id = id
         self.originalPath = originalPath
+        self.displayName = displayName?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            ? displayName!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : Self.defaultDisplayName(forOriginalPath: originalPath)
         self.importedAt = importedAt
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        originalPath = try c.decode(String.self, forKey: .originalPath)
+        importedAt = try c.decode(Date.self, forKey: .importedAt)
+
+        let decoded = try c.decodeIfPresent(String.self, forKey: .displayName)
+        let trimmed = decoded?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            displayName = trimmed
+        } else {
+            displayName = Self.defaultDisplayName(forOriginalPath: originalPath)
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(originalPath, forKey: .originalPath)
+        try c.encode(displayName, forKey: .displayName)
+        try c.encode(importedAt, forKey: .importedAt)
+    }
+
+    private static func defaultDisplayName(forOriginalPath path: String) -> String {
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        if !name.isEmpty { return name }
+        return path
     }
 }
 
@@ -219,6 +259,23 @@ public final class ProjectEditor {
         return id
     }
 
+    public func renameAsset(assetId: UUID, displayName: String) throws {
+        guard let assetIndex = project.mediaAssets.firstIndex(where: { $0.id == assetId }) else {
+            throw ProjectEditError.missingAsset(assetId)
+        }
+
+        let trimmed = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return
+        }
+
+        let oldName = project.mediaAssets[assetIndex].displayName
+        let newName = trimmed
+        guard oldName != newName else { return }
+
+        execute(SetAssetDisplayNameCommand(assetId: assetId, oldName: oldName, newName: newName))
+    }
+
     public func addTrack(kind: TrackKind) {
         execute(AddTrackCommand(kind: kind))
     }
@@ -249,25 +306,121 @@ public final class ProjectEditor {
     }
 
     public func moveClip(clipId: UUID, toStartSeconds: Double) throws {
-        let (trackId, oldStart) = try locateClip(clipId: clipId)
-        let newStart = max(0, toStartSeconds)
-        let command = MoveClipCommand(trackId: trackId, clipId: clipId, oldStartSeconds: oldStart, newStartSeconds: newStart)
-        execute(command)
+        try moveClipsWithAutoLane([(clipId: clipId, startSeconds: toStartSeconds)], commandName: "Move Clip")
     }
 
     public func moveClips(_ moves: [(clipId: UUID, startSeconds: Double)]) throws {
         guard !moves.isEmpty else { return }
+        try moveClipsWithAutoLane(moves, commandName: "Move Clips")
+    }
 
-        var items: [MoveClipsCommand.Item] = []
-        items.reserveCapacity(moves.count)
+    private func moveClipsWithAutoLane(_ moves: [(clipId: UUID, startSeconds: Double)], commandName: String) throws {
+        guard !moves.isEmpty else { return }
 
-        for (clipId, startSeconds) in moves {
-            let (trackId, oldStart) = try locateClip(clipId: clipId)
-            let newStart = max(0, startSeconds)
-            items.append(.init(trackId: trackId, clipId: clipId, oldStartSeconds: oldStart, newStartSeconds: newStart))
+        let uniqueMoves: [(clipId: UUID, startSeconds: Double)] = {
+            // If a clip appears multiple times, keep the last provided target.
+            var dict: [UUID: Double] = [:]
+            for (id, s) in moves { dict[id] = s }
+            return dict
+                .map { ($0.key, $0.value) }
+                .sorted { $0.0.uuidString < $1.0.uuidString }
+        }()
+
+        let before = project
+        var after = project
+
+        let movingIds = Set(uniqueMoves.map { $0.clipId })
+
+        // Capture the moving clips and their original track kind.
+        struct MovePayload {
+            let clip: Clip
+            let originalTrackKind: TrackKind
+            let originalTrackIndex: Int
+            let targetStartSeconds: Double
         }
 
-        execute(MoveClipsCommand(items: items))
+        var payloads: [UUID: MovePayload] = [:]
+        payloads.reserveCapacity(uniqueMoves.count)
+
+        for (clipId, startSeconds) in uniqueMoves {
+            let located = try locateClipIndexed(clipId: clipId)
+            let kind = project.timeline.tracks[located.trackIndex].kind
+            payloads[clipId] = MovePayload(
+                clip: located.clip,
+                originalTrackKind: kind,
+                originalTrackIndex: located.trackIndex,
+                targetStartSeconds: max(0, startSeconds)
+            )
+        }
+
+        // Remove moving clips from all tracks first.
+        for tIndex in after.timeline.tracks.indices {
+            after.timeline.tracks[tIndex].clips.removeAll { movingIds.contains($0.id) }
+        }
+
+        func overlaps(_ a0: Double, _ a1: Double, _ b0: Double, _ b1: Double) -> Bool {
+            let eps = 1e-9
+            return a0 < b1 - eps && a1 > b0 + eps
+        }
+
+        func trackHasRoom(trackIndex: Int, startSeconds: Double, durationSeconds: Double) -> Bool {
+            guard after.timeline.tracks.indices.contains(trackIndex) else { return false }
+            let clips = after.timeline.tracks[trackIndex].clips
+            let a0 = startSeconds
+            let a1 = startSeconds + max(0, durationSeconds)
+            for c in clips {
+                let b0 = c.timelineStartSeconds
+                let b1 = c.timelineStartSeconds + c.durationSeconds
+                if overlaps(a0, a1, b0, b1) { return false }
+            }
+            return true
+        }
+
+        func insertClipSorted(trackIndex: Int, clip: Clip) {
+            var clips = after.timeline.tracks[trackIndex].clips
+            let idx = clips.firstIndex {
+                if abs($0.timelineStartSeconds - clip.timelineStartSeconds) > 1e-9 {
+                    return $0.timelineStartSeconds > clip.timelineStartSeconds
+                }
+                return $0.id.uuidString > clip.id.uuidString
+            } ?? clips.count
+            clips.insert(clip, at: idx)
+            after.timeline.tracks[trackIndex].clips = clips
+        }
+
+        // Greedy lane assignment per clip.
+        for (clipId, _) in uniqueMoves {
+            guard let payload = payloads[clipId] else { continue }
+            let start = payload.targetStartSeconds
+
+            var moved = payload.clip
+            moved.timelineStartSeconds = start
+
+            let duration = moved.durationSeconds
+            let kind = payload.originalTrackKind
+
+            // Candidate tracks: original first, then other same-kind tracks.
+            var candidates: [Int] = []
+            if after.timeline.tracks.indices.contains(payload.originalTrackIndex), after.timeline.tracks[payload.originalTrackIndex].kind == kind {
+                candidates.append(payload.originalTrackIndex)
+            }
+            for idx in after.timeline.tracks.indices {
+                if after.timeline.tracks[idx].kind == kind, !candidates.contains(idx) {
+                    candidates.append(idx)
+                }
+            }
+
+            if let targetIndex = candidates.first(where: { trackHasRoom(trackIndex: $0, startSeconds: start, durationSeconds: duration) }) {
+                insertClipSorted(trackIndex: targetIndex, clip: moved)
+            } else {
+                // No room: create a new same-kind track and place it there.
+                after.addTrack(kind: kind)
+                let newTrackIndex = max(0, after.timeline.tracks.count - 1)
+                insertClipSorted(trackIndex: newTrackIndex, clip: moved)
+            }
+        }
+
+        execute(ProjectSnapshotCommand(name: commandName, before: before, after: after))
     }
 
     public func trimClip(
@@ -451,17 +604,19 @@ public final class ProjectEditor {
         let clip = located.clip
         let start = clip.timelineStartSeconds
         let end = clip.timelineStartSeconds + clip.durationSeconds
-        let t = timeSeconds
+        // Snap split time to the nearest frame to avoid sub-frame boundaries.
+        // Sub-frame splits can cause tiny composition gaps/overlaps -> flashes in preview/export.
+        let t = quantizeToFrame(timeSeconds)
 
         // Must split strictly inside clip bounds.
         guard t > start + 1e-9, t < end - 1e-9 else {
-            throw ProjectEditError.invalidSplitTime(clipId: clipId, timeSeconds: timeSeconds)
+            throw ProjectEditError.invalidSplitTime(clipId: clipId, timeSeconds: t)
         }
 
         let leftDisplay = t - start
         let rightDisplay = end - t
         if leftDisplay < ProjectEditorConstants.minClipDurationSeconds || rightDisplay < ProjectEditorConstants.minClipDurationSeconds {
-            throw ProjectEditError.splitTooSmall(clipId: clipId, timeSeconds: timeSeconds)
+            throw ProjectEditError.splitTooSmall(clipId: clipId, timeSeconds: t)
         }
 
         let command = SplitClipCommand(
@@ -471,6 +626,101 @@ public final class ProjectEditor {
             splitTimeSeconds: t
         )
         execute(command)
+    }
+
+    /// Split (blade) multiple clips at the given timeline time as a single undo/redo step.
+    ///
+    /// Clips that cannot be split at the given time (outside bounds or too-small result)
+    /// are ignored.
+    public func splitClips(clipIds: [UUID], at timeSeconds: Double) {
+        let unique = Array(Set(clipIds))
+        guard !unique.isEmpty else { return }
+
+        let t = quantizeToFrame(timeSeconds)
+
+        let before = project
+        var after = project
+
+        // Keep a deterministic processing order for stable results.
+        let ordered: [UUID] = unique.sorted { $0.uuidString < $1.uuidString }
+        var didAnySplit = false
+        for id in ordered {
+            if Self.splitClipInProject(&after, clipId: id, splitTimeSeconds: t) {
+                didAnySplit = true
+            }
+        }
+        guard didAnySplit else { return }
+
+        let name = ordered.count == 1 ? "Split Clip" : "Split Clips"
+        execute(ProjectSnapshotCommand(name: name, before: before, after: after))
+    }
+
+    private static func splitClipInProject(_ project: inout Project, clipId: UUID, splitTimeSeconds t: Double) -> Bool {
+        // Locate clip by id.
+        for trackIndex in project.timeline.tracks.indices {
+            if let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) {
+                let clip = project.timeline.tracks[trackIndex].clips[clipIndex]
+                let start = clip.timelineStartSeconds
+                let end = clip.timelineStartSeconds + clip.durationSeconds
+
+                // Must split strictly inside clip bounds.
+                guard t > start + 1e-9, t < end - 1e-9 else { return false }
+
+                let leftDisplay = t - start
+                let rightStart = start + leftDisplay
+                let rightDisplay = end - rightStart
+                guard leftDisplay >= ProjectEditorConstants.minClipDurationSeconds,
+                      rightDisplay >= ProjectEditorConstants.minClipDurationSeconds
+                else { return false }
+
+                let speed = clip.speed
+
+                var left = clip
+                left.durationSeconds = leftDisplay
+
+                var right = clip
+                right.id = UUID()
+                right.timelineStartSeconds = rightStart
+                right.sourceInSeconds = clip.sourceInSeconds + leftDisplay * max(0.0001, speed)
+                right.durationSeconds = rightDisplay
+
+                project.timeline.tracks[trackIndex].clips[clipIndex] = left
+                project.timeline.tracks[trackIndex].clips.insert(right, at: clipIndex + 1)
+                return true
+            }
+        }
+        return false
+    }
+
+    private func quantizeToFrame(_ seconds: Double) -> Double {
+        let fps = max(1.0, project.meta.fps)
+        let frame = 1.0 / fps
+        guard frame.isFinite, frame > 0, seconds.isFinite else { return seconds }
+        return (seconds / frame).rounded() * frame
+    }
+
+    public func setClipVolume(clipId: UUID, volume: Double) throws {
+        let (trackId, clip) = try locateClipFull(clipId: clipId)
+        let newVolume = max(0, min(volume, 2.0))
+        let command = SetClipVolumeCommand(
+            trackId: trackId,
+            clipId: clipId,
+            oldVolume: clip.volume,
+            newVolume: newVolume
+        )
+        execute(command)
+    }
+
+    public func toggleTrackMute(trackId: UUID) throws {
+        let trackIndex = try locateTrackIndex(trackId: trackId)
+        let old = project.timeline.tracks[trackIndex].isMuted
+        execute(SetTrackMuteCommand(trackId: trackId, oldIsMuted: old, newIsMuted: !old))
+    }
+
+    public func toggleTrackSolo(trackId: UUID) throws {
+        let trackIndex = try locateTrackIndex(trackId: trackId)
+        let old = project.timeline.tracks[trackIndex].isSolo
+        execute(SetTrackSoloCommand(trackId: trackId, oldIsSolo: old, newIsSolo: !old))
     }
 
     private func locateClip(clipId: UUID) throws -> (trackId: UUID, startSeconds: Double) {
@@ -498,6 +748,27 @@ public final class ProjectEditor {
             }
         }
         throw ProjectEditError.missingClip(clipId)
+    }
+
+    private func locateTrackIndex(trackId: UUID) throws -> Int {
+        guard let idx = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else {
+            throw ProjectEditError.missingTrack(trackId)
+        }
+        return idx
+    }
+}
+
+private struct ProjectSnapshotCommand: EditorCommand {
+    let name: String
+    let before: Project
+    let after: Project
+
+    func apply(to project: inout Project) {
+        project = after
+    }
+
+    func revert(on project: inout Project) {
+        project = before
     }
 }
 
@@ -566,7 +837,10 @@ private struct SplitClipCommand: EditorCommand {
         if !(t > start + 1e-9 && t < end - 1e-9) { return }
 
         let leftDisplay = t - start
-        let rightDisplay = end - t
+        // IMPORTANT: derive the right start from (start + leftDisplay) so the boundary is exactly consistent
+        // with the left clip end when recomputed later.
+        let rightStart = start + leftDisplay
+        let rightDisplay = end - rightStart
         if leftDisplay < ProjectEditorConstants.minClipDurationSeconds || rightDisplay < ProjectEditorConstants.minClipDurationSeconds { return }
 
         let speed = clip.speed
@@ -576,7 +850,7 @@ private struct SplitClipCommand: EditorCommand {
 
         var right = clip
         right.id = rightClipId
-        right.timelineStartSeconds = t
+        right.timelineStartSeconds = rightStart
         right.sourceInSeconds = clip.sourceInSeconds + leftDisplay * max(0.0001, speed)
         right.durationSeconds = rightDisplay
 
@@ -603,6 +877,63 @@ private struct SplitClipCommand: EditorCommand {
     }
 }
 
+private struct SetClipVolumeCommand: EditorCommand {
+    let trackId: UUID
+    let clipId: UUID
+    let oldVolume: Double
+    let newVolume: Double
+
+    var name: String { "Set Clip Volume" }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].volume = newVolume
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].volume = oldVolume
+    }
+}
+
+private struct SetTrackMuteCommand: EditorCommand {
+    let trackId: UUID
+    let oldIsMuted: Bool
+    let newIsMuted: Bool
+
+    var name: String { newIsMuted ? "Mute Track" : "Unmute Track" }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        project.timeline.tracks[trackIndex].isMuted = newIsMuted
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        project.timeline.tracks[trackIndex].isMuted = oldIsMuted
+    }
+}
+
+private struct SetTrackSoloCommand: EditorCommand {
+    let trackId: UUID
+    let oldIsSolo: Bool
+    let newIsSolo: Bool
+
+    var name: String { newIsSolo ? "Solo Track" : "Unsolo Track" }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        project.timeline.tracks[trackIndex].isSolo = newIsSolo
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        project.timeline.tracks[trackIndex].isSolo = oldIsSolo
+    }
+}
+
 private struct ImportAssetCommand: EditorCommand {
     let assetId: UUID
     let path: String
@@ -615,6 +946,24 @@ private struct ImportAssetCommand: EditorCommand {
 
     func revert(on project: inout Project) {
         project.mediaAssets.removeAll { $0.id == assetId }
+    }
+}
+
+private struct SetAssetDisplayNameCommand: EditorCommand {
+    let assetId: UUID
+    let oldName: String
+    let newName: String
+
+    var name: String { "Rename Asset" }
+
+    func apply(to project: inout Project) {
+        guard let idx = project.mediaAssets.firstIndex(where: { $0.id == assetId }) else { return }
+        project.mediaAssets[idx].displayName = newName
+    }
+
+    func revert(on project: inout Project) {
+        guard let idx = project.mediaAssets.firstIndex(where: { $0.id == assetId }) else { return }
+        project.mediaAssets[idx].displayName = oldName
     }
 }
 
@@ -861,10 +1210,39 @@ public struct Track: Codable, Sendable {
     public var kind: TrackKind
     public var clips: [Clip]
 
-    public init(id: UUID = UUID(), kind: TrackKind, clips: [Clip] = []) {
+    // Audio controls (MVP)
+    public var isMuted: Bool
+    public var isSolo: Bool
+
+    public init(
+        id: UUID = UUID(),
+        kind: TrackKind,
+        clips: [Clip] = [],
+        isMuted: Bool = false,
+        isSolo: Bool = false
+    ) {
         self.id = id
         self.kind = kind
         self.clips = clips
+        self.isMuted = isMuted
+        self.isSolo = isSolo
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case kind
+        case clips
+        case isMuted
+        case isSolo
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        kind = try c.decode(TrackKind.self, forKey: .kind)
+        clips = try c.decode([Clip].self, forKey: .clips)
+        isMuted = try c.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
+        isSolo = try c.decodeIfPresent(Bool.self, forKey: .isSolo) ?? false
     }
 }
 
@@ -880,13 +1258,17 @@ public struct Clip: Codable, Sendable {
     // Basic params (MVP)
     public var speed: Double
 
+    // Audio params (MVP)
+    public var volume: Double
+
     public init(
         id: UUID = UUID(),
         assetId: UUID,
         timelineStartSeconds: Double,
         sourceInSeconds: Double,
         durationSeconds: Double,
-        speed: Double = 1.0
+        speed: Double = 1.0,
+        volume: Double = 1.0
     ) {
         self.id = id
         self.assetId = assetId
@@ -894,6 +1276,28 @@ public struct Clip: Codable, Sendable {
         self.sourceInSeconds = sourceInSeconds
         self.durationSeconds = durationSeconds
         self.speed = speed
+        self.volume = volume
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case assetId
+        case timelineStartSeconds
+        case sourceInSeconds
+        case durationSeconds
+        case speed
+        case volume
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        assetId = try c.decode(UUID.self, forKey: .assetId)
+        timelineStartSeconds = try c.decode(Double.self, forKey: .timelineStartSeconds)
+        sourceInSeconds = try c.decode(Double.self, forKey: .sourceInSeconds)
+        durationSeconds = try c.decode(Double.self, forKey: .durationSeconds)
+        speed = try c.decodeIfPresent(Double.self, forKey: .speed) ?? 1.0
+        volume = try c.decodeIfPresent(Double.self, forKey: .volume) ?? 1.0
     }
 }
 

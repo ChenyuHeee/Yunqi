@@ -1,0 +1,99 @@
+/* YunqiMacApp UI strings */
+
+/* App */
+"app.name" = "Yunqi";
+
+/* Menu sections */
+"menu.section.playback" = "Playback";
+"menu.section.selection" = "Selection";
+"menu.section.range" = "Range";
+"menu.section.timeline" = "Timeline";
+"menu.section.clip" = "Clip";
+
+/* File menu */
+"menu.file.newProject" = "New Project";
+"menu.file.open" = "Open…";
+"menu.file.save" = "Save";
+"menu.file.saveAs" = "Save As…";
+"menu.file.importMedia" = "Import Media…";
+"menu.file.export" = "Export…";
+
+/* Edit menu */
+"menu.edit.undo" = "Undo";
+"menu.edit.undoWithName" = "Undo %@";
+"menu.edit.redo" = "Redo";
+"menu.edit.redoWithName" = "Redo %@";
+
+/* Playback menu */
+"menu.playback.playPause" = "Play/Pause";
+"menu.playback.stop" = "Stop";
+"menu.playback.toggleLoop" = "Toggle Loop";
+
+/* Selection menu */
+"menu.selection.selectAll" = "Select All";
+"menu.selection.deselect" = "Deselect";
+
+/* Range menu */
+"menu.range.setIn" = "Set In";
+"menu.range.setOut" = "Set Out";
+"menu.range.clear" = "Clear Range";
+"menu.range.rippleDeleteRange" = "Ripple Delete Range";
+
+/* Timeline menu */
+"menu.timeline.addVideoTrack" = "Add Video Track";
+"menu.timeline.addAudioTrack" = "Add Audio Track";
+"menu.timeline.expandAudioComponents" = "Expand Audio Components";
+"menu.timeline.collapseAudioComponents" = "Collapse Audio Components";
+"menu.timeline.toggleTrackMute" = "Toggle Track Mute";
+"menu.timeline.toggleTrackSolo" = "Toggle Track Solo";
+
+/* Asset context menu */
+"menu.asset.rename" = "Rename";
+
+"menu.blade" = "Blade";
+"menu.bladeAll" = "Blade All";
+
+"menu.increaseClipVolume" = "Increase Clip Volume";
+"menu.decreaseClipVolume" = "Decrease Clip Volume";
+
+"menu.rippleDelete" = "Ripple Delete";
+"menu.rippleDeleteN" = "Ripple Delete %d Clips";
+"menu.delete" = "Delete";
+"menu.deleteN" = "Delete %d Clips";
+
+/* Toolbar / main UI */
+"ui.toolbar.play" = "Play";
+"ui.toolbar.pause" = "Pause";
+"ui.toolbar.loop" = "Loop";
+"ui.toolbar.exportPercent" = "export %.0f%%";
+"ui.toolbar.addVideoTrack" = "+ Video Track";
+
+"ui.sidebar.fps" = "FPS: %.0f";
+"ui.sidebar.media" = "Media";
+"ui.sidebar.noAssets" = "No assets";
+"ui.sidebar.nameField" = "Name";
+"ui.sidebar.addToVideoTrack" = "Add To Video Track";
+
+"ui.sidebar.tracks" = "Tracks";
+"ui.sidebar.noTracks" = "No tracks";
+"ui.sidebar.clipsCount" = "clips: %d";
+
+"ui.preferences.newProjectOpenTarget" = "New Project — Open Target";
+"ui.preferences.openProjectOpenTarget" = "Open Project — Open Target";
+"ui.openTarget.currentTab" = "Current Tab";
+"ui.openTarget.newTab" = "New Tab";
+"ui.openTarget.newWindow" = "New Window";
+
+"ui.timeline.placeholder" = "Timeline (placeholder)\nUse + Video Track to add a track.";
+
+/* Alerts */
+"alert.saveChanges.message" = "Do you want to save the changes made to \"%@\"?";
+"alert.saveChanges.informative" = "Your changes will be lost if you don't save them.";
+"alert.saveChanges.save" = "Save";
+"alert.saveChanges.dontSave" = "Don't Save";
+"alert.saveChanges.cancel" = "Cancel";
+
+/* Export status */
+"status.exporting" = "Exporting…";
+"status.exported" = "Exported: %@";
+"status.exportFailed" = "Export failed: %@";

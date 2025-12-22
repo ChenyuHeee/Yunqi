@@ -58,6 +58,11 @@ public actor EditorSession {
         return assetId
     }
 
+    public func renameAsset(assetId: UUID, displayName: String) throws {
+        try editor.renameAsset(assetId: assetId, displayName: displayName)
+        notifyProjectChanged()
+    }
+
     public func addTrack(kind: TrackKind) {
         editor.addTrack(kind: kind)
         notifyProjectChanged()
@@ -129,6 +134,26 @@ public actor EditorSession {
 
     public func splitClip(clipId: UUID, at timeSeconds: Double) throws {
         try editor.splitClip(clipId: clipId, at: timeSeconds)
+        notifyProjectChanged()
+    }
+
+    public func splitClips(clipIds: [UUID], at timeSeconds: Double) {
+        editor.splitClips(clipIds: clipIds, at: timeSeconds)
+        notifyProjectChanged()
+    }
+
+    public func setClipVolume(clipId: UUID, volume: Double) throws {
+        try editor.setClipVolume(clipId: clipId, volume: volume)
+        notifyProjectChanged()
+    }
+
+    public func toggleTrackMute(trackId: UUID) throws {
+        try editor.toggleTrackMute(trackId: trackId)
+        notifyProjectChanged()
+    }
+
+    public func toggleTrackSolo(trackId: UUID) throws {
+        try editor.toggleTrackSolo(trackId: trackId)
         notifyProjectChanged()
     }
 

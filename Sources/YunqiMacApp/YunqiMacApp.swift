@@ -14,6 +14,14 @@ private final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
 
+#if DEBUG
+        NSLog("[i18n] Locale.preferredLanguages=%@", Locale.preferredLanguages.joined(separator: ", "))
+        NSLog("[i18n] Bundle.main.preferredLocalizations=%@", Bundle.main.preferredLocalizations.joined(separator: ", "))
+        NSLog("[i18n] Bundle.module.localizations=%@", Bundle.module.localizations.joined(separator: ", "))
+        NSLog("[i18n] Bundle.module.preferredLocalizations=%@", Bundle.module.preferredLocalizations.joined(separator: ", "))
+        NSLog("[i18n] sample menu.section.clip=%@", L("menu.section.clip"))
+#endif
+
         // Allow system window tab bar behavior.
         NSWindow.allowsAutomaticWindowTabbing = true
     }
@@ -29,7 +37,7 @@ struct YunqiMacApp: App {
     @AppStorage(AppPreferences.openProjectOpenTargetKey) private var openProjectTargetRaw: String = OpenTarget.newTab.rawValue
 
     var body: some Scene {
-        WindowGroup("Yunqi") {
+        WindowGroup(L("app.name")) {
             ProjectWindowView(launch: nil)
                 .frame(minWidth: 980, minHeight: 640)
         }
@@ -40,40 +48,44 @@ struct YunqiMacApp: App {
         }
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("New Project") {
+                Button(L("menu.file.newProject")) {
                     handleNewProject()
                 }
                 .keyboardShortcut("n", modifiers: [.command])
 
-                Button("Open…") {
+                Button(L("menu.file.open")) {
                     presentOpenPanel()
                 }
                 .keyboardShortcut("o", modifiers: [.command])
 
                 Divider()
 
-                Button("Save") {
-                    _ = focusedWorkspace?.saveOrPromptSaveAs()
-                }
-                .keyboardShortcut("s", modifiers: [.command])
+                if let ws = focusedWorkspace {
+                    FileSaveCommands(workspace: ws)
+                } else {
+                    Button(L("menu.file.save")) {}
+                        .keyboardShortcut("s", modifiers: [.command])
+                        .disabled(true)
 
-                Button("Save As…") {
-                    _ = focusedWorkspace?.presentSavePanel()
+                    Button(L("menu.file.saveAs")) {}
+                        .keyboardShortcut("s", modifiers: [.command, .shift])
+                        .disabled(true)
                 }
-                .keyboardShortcut("s", modifiers: [.command, .shift])
             }
 
             CommandGroup(after: .newItem) {
                 Divider()
-                Button("Import Media…") {
-                    focusedWorkspace?.presentImportMediaPanel()
-                }
-                .keyboardShortcut("i", modifiers: [.command])
+                if let ws = focusedWorkspace {
+                    FileImportExportCommands(workspace: ws)
+                } else {
+                    Button(L("menu.file.importMedia")) {}
+                        .keyboardShortcut("i", modifiers: [.command])
+                        .disabled(true)
 
-                Button("Export…") {
-                    focusedWorkspace?.presentExportPanel()
+                    Button(L("menu.file.export")) {}
+                        .keyboardShortcut("e", modifiers: [.command])
+                        .disabled(true)
                 }
-                .keyboardShortcut("e", modifiers: [.command])
             }
 
             CommandGroup(replacing: .undoRedo) {
@@ -84,130 +96,126 @@ struct YunqiMacApp: App {
                         ws.redo()
                     }
                 } else {
-                    Button("Undo") {}
+                    Button(L("menu.edit.undo")) {}
                         .keyboardShortcut("z", modifiers: [.command])
                         .disabled(true)
 
-                    Button("Redo") {}
+                    Button(L("menu.edit.redo")) {}
                         .keyboardShortcut("z", modifiers: [.command, .shift])
                         .disabled(true)
                 }
             }
 
-            CommandMenu("Playback") {
-                Button("Play/Pause") {
-                    guard let ws = focusedWorkspace else {
-                        NSSound.beep()
-                        return
-                    }
-                    if ws.preview.currentRequestedRate == 0 {
-                        ws.playPreview()
-                    } else {
-                        ws.pausePreview()
-                    }
-                }
-                .keyboardShortcut(.space, modifiers: [])
+            CommandMenu(L("menu.section.playback")) {
+                if let ws = focusedWorkspace {
+                    PlaybackCommands(workspace: ws)
+                } else {
+                    Button(L("menu.playback.playPause")) {}
+                        .keyboardShortcut(.space, modifiers: [])
+                        .disabled(true)
 
-                Button("Stop") {
-                    focusedWorkspace?.stopPreview()
-                }
+                    Button(L("menu.playback.stop")) {}
+                        .disabled(true)
 
-                Divider()
+                    Divider()
 
-                Button("Toggle Loop") {
-                    focusedWorkspace?.isPreviewLooping.toggle()
+                    Button(L("menu.playback.toggleLoop")) {}
+                        .keyboardShortcut("l", modifiers: [.command])
+                        .disabled(true)
                 }
-                .keyboardShortcut("l", modifiers: [.command])
             }
 
-            CommandMenu("Selection") {
-                Button("Select All") {
+            CommandMenu(L("menu.section.selection")) {
+                Button(L("menu.selection.selectAll")) {
                     NSApp.sendAction(#selector(NSResponder.selectAll(_:)), to: nil, from: nil)
                 }
 
-                Button("Deselect") {
+                Button(L("menu.selection.deselect")) {
                     NSApp.sendAction(#selector(NSResponder.cancelOperation(_:)), to: nil, from: nil)
                 }
                 .keyboardShortcut(.escape, modifiers: [])
             }
 
-            CommandMenu("Range") {
-                Button("Set In") {
-                    guard let ws = focusedWorkspace else {
-                        NSSound.beep()
-                        return
-                    }
-                    ws.updateTimelineRange(inSeconds: ws.previewTimeSeconds, outSeconds: ws.rangeOutSeconds)
-                }
+            CommandMenu(L("menu.section.range")) {
+                if let ws = focusedWorkspace {
+                    RangeCommands(workspace: ws)
+                } else {
+                    Button(L("menu.range.setIn")) {}
+                        .disabled(true)
 
-                Button("Set Out") {
-                    guard let ws = focusedWorkspace else {
-                        NSSound.beep()
-                        return
-                    }
-                    ws.updateTimelineRange(inSeconds: ws.rangeInSeconds, outSeconds: ws.previewTimeSeconds)
-                }
+                    Button(L("menu.range.setOut")) {}
+                        .disabled(true)
 
-                Divider()
+                    Divider()
 
-                Button("Clear Range") {
-                    focusedWorkspace?.clearTimelineRange()
-                }
-                .disabled(!(focusedWorkspace?.hasRangeSelection ?? false))
+                    Button(L("menu.range.clear")) {}
+                        .disabled(true)
 
-                Button("Ripple Delete Range") {
-                    guard let ws = focusedWorkspace else {
-                        NSSound.beep()
-                        return
-                    }
-                    guard let r = ws.normalizedRange else {
-                        NSSound.beep()
-                        return
-                    }
-                    Task {
-                        do {
-                            try await ws.store.rippleDeleteRange(inSeconds: r.inSeconds, outSeconds: r.outSeconds)
-                            ws.clearTimelineRange()
-                        } catch {
-                            NSSound.beep()
-                        }
-                    }
-                }
-                .disabled(!(focusedWorkspace?.hasRangeSelection ?? false))
-            }
-
-            CommandMenu("Timeline") {
-                Button("Add Video Track") {
-                    focusedWorkspace?.addVideoTrack()
+                    Button(L("menu.range.rippleDeleteRange")) {}
+                        .disabled(true)
                 }
             }
 
-            CommandMenu("Clip") {
-                let selectionCount = focusedWorkspace?.selectedClipIds.count ?? 0
-                let hasPrimary = focusedWorkspace?.primarySelectedClipId != nil
-                let hasSelection = selectionCount > 0 || hasPrimary
-                let deleteTitle = (selectionCount > 1) ? "Delete \(selectionCount) Clips" : "Delete"
-                let rippleTitle = (selectionCount > 1) ? "Ripple Delete \(selectionCount) Clips" : "Ripple Delete"
+            CommandMenu(L("menu.section.timeline")) {
+                if let ws = focusedWorkspace {
+                    TimelineCommands(workspace: ws)
+                } else {
+                    Button(L("menu.timeline.addVideoTrack")) {}
+                        .disabled(true)
 
-                Button(hasPrimary ? "Split Clip" : "Split") {
-                    focusedWorkspace?.splitPrimaryClipAtPlayhead()
+                    Button(L("menu.timeline.addAudioTrack")) {}
+                        .disabled(true)
+
+                    Divider()
+
+                    Button(L("menu.timeline.collapseAudioComponents")) {}
+                        .keyboardShortcut("a", modifiers: [.command, .option])
+                        .disabled(true)
+
+                    Divider()
+
+                    Button(L("menu.timeline.toggleTrackMute")) {}
+                        .keyboardShortcut("m", modifiers: [.control])
+                        .disabled(true)
+
+                    Button(L("menu.timeline.toggleTrackSolo")) {}
+                        .keyboardShortcut("s", modifiers: [.control])
+                        .disabled(true)
                 }
-                .keyboardShortcut("b", modifiers: [.command])
-                .disabled(focusedWorkspace?.primarySelectedClipId == nil)
+            }
 
-                Divider()
+            CommandMenu(L("menu.section.clip")) {
+                if let ws = focusedWorkspace {
+                    ClipCommands(workspace: ws)
+                } else {
+                    Button(L("menu.blade")) {}
+                        .keyboardShortcut("b", modifiers: [.command])
+                        .disabled(true)
 
-                Button(rippleTitle) {
-                    focusedWorkspace?.deleteSelectedClips(ripple: true)
+                    Button(L("menu.bladeAll")) {}
+                        .keyboardShortcut("b", modifiers: [.command, .shift])
+                        .disabled(true)
+
+                    Divider()
+
+                    Button(L("menu.increaseClipVolume")) {}
+                        .keyboardShortcut("=", modifiers: [.option])
+                        .disabled(true)
+
+                    Button(L("menu.decreaseClipVolume")) {}
+                        .keyboardShortcut("-", modifiers: [.option])
+                        .disabled(true)
+
+                    Divider()
+
+                    Button(L("menu.rippleDelete")) {}
+                        .keyboardShortcut(.delete, modifiers: [])
+                        .disabled(true)
+
+                    Button(L("menu.delete")) {}
+                        .keyboardShortcut(.delete, modifiers: [.shift])
+                        .disabled(true)
                 }
-                .keyboardShortcut(.delete, modifiers: [])
-                .disabled(!hasSelection)
-
-                Button(deleteTitle) {
-                    focusedWorkspace?.deleteSelectedClips(ripple: false)
-                }
-                .keyboardShortcut(.delete, modifiers: [.shift])
-                .disabled(!hasSelection)
             }
         }
 
@@ -280,11 +288,11 @@ struct YunqiMacApp: App {
 
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Do you want to save the changes made to \"\(workspace.windowTitle)\"?"
-        alert.informativeText = "Your changes will be lost if you don't save them."
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Don't Save")
-        alert.addButton(withTitle: "Cancel")
+        alert.messageText = String(format: L("alert.saveChanges.message"), workspace.windowTitle)
+        alert.informativeText = L("alert.saveChanges.informative")
+        alert.addButton(withTitle: L("alert.saveChanges.save"))
+        alert.addButton(withTitle: L("alert.saveChanges.dontSave"))
+        alert.addButton(withTitle: L("alert.saveChanges.cancel"))
 
         let resp = alert.runModal()
         if resp == .alertFirstButtonReturn {
@@ -297,6 +305,195 @@ struct YunqiMacApp: App {
     }
 }
 
+private struct FileSaveCommands: View {
+    @ObservedObject var workspace: ProjectWorkspace
+
+    var body: some View {
+        Button(L("menu.file.save")) {
+            _ = workspace.saveOrPromptSaveAs()
+        }
+        .keyboardShortcut("s", modifiers: [.command])
+
+        Button(L("menu.file.saveAs")) {
+            _ = workspace.presentSavePanel()
+        }
+        .keyboardShortcut("s", modifiers: [.command, .shift])
+    }
+}
+
+private struct FileImportExportCommands: View {
+    @ObservedObject var workspace: ProjectWorkspace
+
+    var body: some View {
+        Button(L("menu.file.importMedia")) {
+            workspace.presentImportMediaPanel()
+        }
+        .keyboardShortcut("i", modifiers: [.command])
+
+        Button(L("menu.file.export")) {
+            workspace.presentExportPanel()
+        }
+        .keyboardShortcut("e", modifiers: [.command])
+    }
+}
+
+private struct PlaybackCommands: View {
+    @ObservedObject var workspace: ProjectWorkspace
+
+    var body: some View {
+        Button(L("menu.playback.playPause")) {
+            if workspace.preview.currentRequestedRate == 0 {
+                workspace.playPreview()
+            } else {
+                workspace.pausePreview()
+            }
+        }
+        .keyboardShortcut(.space, modifiers: [])
+        .disabled(workspace.isExporting)
+
+        Button(L("menu.playback.stop")) {
+            workspace.stopPreview()
+        }
+        .disabled(workspace.isExporting)
+
+        Divider()
+
+        Button(L("menu.playback.toggleLoop")) {
+            workspace.isPreviewLooping.toggle()
+        }
+        .keyboardShortcut("l", modifiers: [.command])
+        .disabled(workspace.isExporting)
+    }
+}
+
+private struct RangeCommands: View {
+    @ObservedObject var workspace: ProjectWorkspace
+
+    var body: some View {
+        Button(L("menu.range.setIn")) {
+            workspace.updateTimelineRange(inSeconds: workspace.previewTimeSeconds, outSeconds: workspace.rangeOutSeconds)
+        }
+
+        Button(L("menu.range.setOut")) {
+            workspace.updateTimelineRange(inSeconds: workspace.rangeInSeconds, outSeconds: workspace.previewTimeSeconds)
+        }
+
+        Divider()
+
+        Button(L("menu.range.clear")) {
+            workspace.clearTimelineRange()
+        }
+        .disabled(!workspace.hasRangeSelection)
+
+        Button(L("menu.range.rippleDeleteRange")) {
+            guard let r = workspace.normalizedRange else {
+                NSSound.beep()
+                return
+            }
+            Task {
+                do {
+                    try await workspace.store.rippleDeleteRange(inSeconds: r.inSeconds, outSeconds: r.outSeconds)
+                    workspace.clearTimelineRange()
+                } catch {
+                    NSSound.beep()
+                }
+            }
+        }
+        .disabled(!workspace.hasRangeSelection)
+    }
+}
+
+private struct TimelineCommands: View {
+    @ObservedObject var workspace: ProjectWorkspace
+
+    var body: some View {
+        Button(L("menu.timeline.addVideoTrack")) {
+            workspace.addVideoTrack()
+        }
+
+        Button(L("menu.timeline.addAudioTrack")) {
+            workspace.addAudioTrack()
+        }
+
+        Divider()
+
+        Button(workspace.isAudioComponentsExpanded ? L("menu.timeline.collapseAudioComponents") : L("menu.timeline.expandAudioComponents")) {
+            workspace.toggleAudioComponentsExpanded()
+        }
+        .keyboardShortcut("a", modifiers: [.command, .option])
+
+        Divider()
+
+        Button(L("menu.timeline.toggleTrackMute")) {
+            workspace.toggleMuteForTargetTrack()
+        }
+        .keyboardShortcut("m", modifiers: [.control])
+        .disabled(!workspace.canToggleAudioTrackMuteSolo)
+
+        Button(L("menu.timeline.toggleTrackSolo")) {
+            workspace.toggleSoloForTargetTrack()
+        }
+        .keyboardShortcut("s", modifiers: [.control])
+        .disabled(!workspace.canToggleAudioTrackMuteSolo)
+    }
+}
+
+private struct ClipCommands: View {
+    @ObservedObject var workspace: ProjectWorkspace
+
+    var body: some View {
+        let selectionCount = workspace.selectedClipIds.count
+        let hasPrimary = workspace.primarySelectedClipId != nil
+        let hasSelection = selectionCount > 0 || hasPrimary
+        let deleteTitle = (selectionCount > 1)
+        ? Lf("menu.deleteN", selectionCount)
+        : L("menu.delete")
+        let rippleTitle = (selectionCount > 1)
+        ? Lf("menu.rippleDeleteN", selectionCount)
+        : L("menu.rippleDelete")
+
+        Button(L("menu.blade")) {
+            workspace.bladeAtPlayhead()
+        }
+        .keyboardShortcut("b", modifiers: [.command])
+        .disabled(!workspace.canSplitAtPlayhead)
+
+        Button(L("menu.bladeAll")) {
+            workspace.bladeAllAtPlayhead()
+        }
+        .keyboardShortcut("b", modifiers: [.command, .shift])
+        .disabled(!workspace.canSplitAtPlayhead)
+
+        Divider()
+
+        Button(L("menu.increaseClipVolume")) {
+            workspace.adjustClipVolumeAtPlayhead(delta: 0.1)
+        }
+        .keyboardShortcut("=", modifiers: [.option])
+        .disabled(!workspace.canAdjustClipVolumeAtPlayhead)
+
+        Button(L("menu.decreaseClipVolume")) {
+            workspace.adjustClipVolumeAtPlayhead(delta: -0.1)
+        }
+        .keyboardShortcut("-", modifiers: [.option])
+        .disabled(!workspace.canAdjustClipVolumeAtPlayhead)
+
+        Divider()
+
+        Button(rippleTitle) {
+            workspace.deleteSelectedClips(ripple: true)
+        }
+        .keyboardShortcut(.delete, modifiers: [])
+        .disabled(!hasSelection)
+
+        Button(deleteTitle) {
+            workspace.deleteSelectedClips(ripple: false)
+        }
+        .keyboardShortcut(.delete, modifiers: [.shift])
+        .disabled(!hasSelection)
+    }
+}
+
 private struct UndoRedoCommands: View {
     @ObservedObject var store: EditorSessionStore
     let undo: () -> Void
@@ -305,16 +502,16 @@ private struct UndoRedoCommands: View {
     var body: some View {
         let undoTitle = {
             if let name = store.undoActionName, !name.isEmpty {
-                return "Undo \(name)"
+                return Lf("menu.edit.undoWithName", name)
             }
-            return "Undo"
+            return L("menu.edit.undo")
         }()
 
         let redoTitle = {
             if let name = store.redoActionName, !name.isEmpty {
-                return "Redo \(name)"
+                return Lf("menu.edit.redoWithName", name)
             }
-            return "Redo"
+            return L("menu.edit.redo")
         }()
 
         Button(undoTitle, action: undo)
@@ -440,7 +637,7 @@ private struct ContentView: View {
         .toolbar {
             ToolbarItemGroup(placement: .automatic) {
                 let isPlaying = workspace.preview.currentRequestedRate != 0
-                Button(isPlaying ? "Pause" : "Play") {
+                Button(isPlaying ? L("ui.toolbar.pause") : L("ui.toolbar.play")) {
                     if isPlaying {
                         workspace.pausePreview()
                     } else {
@@ -448,20 +645,20 @@ private struct ContentView: View {
                     }
                 }
                 .disabled(workspace.isExporting)
-                Button("Stop") {
+                Button(L("menu.playback.stop")) {
                     workspace.stopPreview()
                 }
                 .disabled(workspace.isExporting)
 
-                Button("Export…") {
+                Button(L("menu.file.export")) {
                     workspace.presentExportPanel()
                 }
                 .disabled(workspace.isExporting)
 
-                Toggle("Loop", isOn: $workspace.isPreviewLooping)
+                Toggle(L("ui.toolbar.loop"), isOn: $workspace.isPreviewLooping)
 
                 if workspace.isExporting {
-                    Text(String(format: "export %.0f%%", workspace.exportProgress * 100))
+                    Text(Lf("ui.toolbar.exportPercent", workspace.exportProgress * 100))
                         .font(.system(size: 11, weight: .regular, design: .monospaced))
                 } else if !workspace.exportStatusText.isEmpty {
                     Text(workspace.exportStatusText)
@@ -471,7 +668,7 @@ private struct ContentView: View {
 
                 Divider()
 
-                Button("+ Video Track") {
+                Button(L("ui.toolbar.addVideoTrack")) {
                     workspace.addVideoTrack()
                 }
             }
@@ -530,11 +727,11 @@ private struct WindowHooksView: NSViewRepresentable {
 
             let alert = NSAlert()
             alert.alertStyle = .warning
-            alert.messageText = "Do you want to save the changes made to \"\(workspace.windowTitle)\"?"
-            alert.informativeText = "Your changes will be lost if you don't save them."
-            alert.addButton(withTitle: "Save")
-            alert.addButton(withTitle: "Don't Save")
-            alert.addButton(withTitle: "Cancel")
+            alert.messageText = String(format: L("alert.saveChanges.message"), workspace.windowTitle)
+            alert.informativeText = L("alert.saveChanges.informative")
+            alert.addButton(withTitle: L("alert.saveChanges.save"))
+            alert.addButton(withTitle: L("alert.saveChanges.dontSave"))
+            alert.addButton(withTitle: L("alert.saveChanges.cancel"))
 
             let resp = alert.runModal()
             if resp == .alertFirstButtonReturn {
@@ -568,9 +765,9 @@ private enum OpenTarget: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .currentTab: return "当前标签"
-        case .newTab: return "新标签"
-        case .newWindow: return "新窗口(新页面)"
+        case .currentTab: return L("ui.openTarget.currentTab")
+        case .newTab: return L("ui.openTarget.newTab")
+        case .newWindow: return L("ui.openTarget.newWindow")
         }
     }
 }
@@ -586,13 +783,13 @@ private struct PreferencesView: View {
 
     var body: some View {
         Form {
-            Picker("New Project 打开方式", selection: $newProjectTargetRaw) {
+            Picker(L("ui.preferences.newProjectOpenTarget"), selection: $newProjectTargetRaw) {
                 ForEach(OpenTarget.allCases) { t in
                     Text(t.title).tag(t.rawValue)
                 }
             }
 
-            Picker("Open… 打开方式", selection: $openProjectTargetRaw) {
+            Picker(L("ui.preferences.openProjectOpenTarget"), selection: $openProjectTargetRaw) {
                 ForEach(OpenTarget.allCases) { t in
                     Text(t.title).tag(t.rawValue)
                 }
@@ -652,13 +849,28 @@ private struct SidebarView: View {
     @ObservedObject var store: EditorSessionStore
 
     @State private var selectedAssetId: UUID?
+    @State private var renamingAssetId: UUID?
+    @State private var renameDraft: String = ""
+
+    @FocusState private var renameFocusedAssetId: UUID?
+
+    private func beginRenameSelectedAsset(project: Project) {
+        guard let id = selectedAssetId,
+              let asset = project.mediaAssets.first(where: { $0.id == id }) else {
+            NSSound.beep()
+            return
+        }
+        renamingAssetId = id
+        renameDraft = asset.displayName
+        renameFocusedAssetId = id
+    }
 
     var body: some View {
         let project = store.project
         VStack(alignment: .leading, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(project.meta.name)
-                    .font(.headline)
+                Text(Lf("ui.sidebar.fps", project.meta.fps))
                 Text("FPS: \(project.meta.fps, specifier: "%.0f")")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -666,30 +878,65 @@ private struct SidebarView: View {
 
             Divider()
 
-            GroupBox("Media") {
+            GroupBox(L("ui.sidebar.media")) {
                 if project.mediaAssets.isEmpty {
-                    Text("No assets")
+                    Text(L("ui.sidebar.noAssets"))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
                     List(project.mediaAssets, id: \.id, selection: $selectedAssetId) { asset in
                         VStack(alignment: .leading, spacing: 2) {
+                            if renamingAssetId == asset.id {
+                                TextField(L("ui.sidebar.nameField"), text: $renameDraft)
+                                    .textFieldStyle(.plain)
+                                    .focused($renameFocusedAssetId, equals: asset.id)
+                                    .onSubmit {
+                                        let newName = renameDraft
+                                        renamingAssetId = nil
+                                        workspace.renameAsset(assetId: asset.id, displayName: newName)
+                                    }
+                                    .onExitCommand {
+                                        renamingAssetId = nil
+                                    }
+                                    .onAppear {
+                                        renameFocusedAssetId = asset.id
+                                    }
+                            } else {
+                                Text(asset.displayName)
+                                    .lineLimit(1)
+                            }
+
                             Text(asset.originalPath)
-                                .lineLimit(1)
-                            Text(asset.id.uuidString)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
+                        }
+                        .contextMenu {
+                            Button(L("menu.asset.rename")) {
+                                renamingAssetId = asset.id
+                                renameDraft = asset.displayName
+                                renameFocusedAssetId = asset.id
+                            }
+                        }
+                        .onDrag {
+                            selectedAssetId = asset.id
+                            return NSItemProvider(object: asset.id.uuidString as NSString)
+                        }
+                        .onTapGesture(count: 2) {
+                            selectedAssetId = asset.id
+                            renamingAssetId = asset.id
+                            renameDraft = asset.displayName
+                            renameFocusedAssetId = asset.id
                         }
                     }
                 }
 
                 HStack {
-                    Button("Import Media…") {
+                    Button(L("menu.file.importMedia")) {
                         workspace.presentImportMediaPanel()
                     }
 
-                    Button("Add To Video Track") {
+                    Button(L("ui.sidebar.addToVideoTrack")) {
                         if let id = selectedAssetId {
                             workspace.addAssetToTimeline(assetId: id)
                         } else {
@@ -701,10 +948,26 @@ private struct SidebarView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 6)
             }
+            .overlay {
+                KeyDownMonitorView(
+                    onKeyDown: { event in
+                        // F2 key
+                        if event.keyCode == 120 {
+                            if renamingAssetId == nil, selectedAssetId != nil {
+                                beginRenameSelectedAsset(project: project)
+                                return true
+                            }
+                        }
+                        return false
+                    }
+                )
+                .frame(width: 0, height: 0)
+                .opacity(0)
+            }
 
-            GroupBox("Tracks") {
+            GroupBox(L("ui.sidebar.tracks")) {
                 if project.timeline.tracks.isEmpty {
-                    Text("No tracks")
+                    Text(L("ui.sidebar.noTracks"))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 } else {
@@ -712,7 +975,7 @@ private struct SidebarView: View {
                         HStack {
                             Text("[\(index)] \(track.kind.rawValue)")
                             Spacer()
-                            Text("clips: \(track.clips.count)")
+                            Text(Lf("ui.sidebar.clipsCount", track.clips.count))
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -722,6 +985,69 @@ private struct SidebarView: View {
             Spacer(minLength: 0)
         }
         .padding(12)
+    }
+}
+
+private struct KeyDownMonitorView: NSViewRepresentable {
+    typealias OnKeyDown = (NSEvent) -> Bool
+    let onKeyDown: OnKeyDown
+
+    private final class MonitorToken: @unchecked Sendable {
+        let raw: Any
+        init(_ raw: Any) {
+            self.raw = raw
+        }
+    }
+
+    final class HostingView: NSView {
+        var onKeyDown: OnKeyDown
+        private var monitor: MonitorToken?
+
+        init(onKeyDown: @escaping OnKeyDown) {
+            self.onKeyDown = onKeyDown
+            super.init(frame: .zero)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil {
+                if let monitor {
+                    NSEvent.removeMonitor(monitor.raw)
+                    self.monitor = nil
+                }
+                return
+            }
+
+            if monitor == nil {
+                let raw = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                    guard let self else { return event }
+                    if self.onKeyDown(event) {
+                        return nil
+                    }
+                    return event
+                }
+                monitor = MonitorToken(raw as Any)
+            }
+        }
+
+        deinit {
+            if let monitor {
+                NSEvent.removeMonitor(monitor.raw)
+            }
+        }
+    }
+
+    func makeNSView(context: Context) -> HostingView {
+        HostingView(onKeyDown: onKeyDown)
+    }
+
+    func updateNSView(_ nsView: HostingView, context: Context) {
+        nsView.onKeyDown = onKeyDown
     }
 }
 
@@ -814,10 +1140,14 @@ private struct TimelineHostView: View {
             project: store.project,
             playheadSeconds: workspace.previewTimeSeconds,
             playerRate: workspace.preview.currentRequestedRate,
+            isAudioComponentsExpanded: workspace.isAudioComponentsExpanded,
             selectedClipIds: workspace.selectedClipIds,
             primarySelectedClipId: workspace.primarySelectedClipId,
             rangeInSeconds: workspace.rangeInSeconds,
             rangeOutSeconds: workspace.rangeOutSeconds,
+            onAddAssetToTimelineRequested: { assetId, timeSeconds, trackIndex in
+                workspace.addAssetToTimeline(assetId: assetId, at: timeSeconds, targetTrackIndex: trackIndex)
+            },
             onSelectionChanged: { selected, primary in
                 workspace.updateTimelineSelection(selected: selected, primary: primary)
             },
@@ -875,6 +1205,33 @@ private struct TimelineHostView: View {
                     }
                 }
             },
+            onSetClipVolumeRequested: { clipId, volume in
+                Task {
+                    do {
+                        try await store.setClipVolume(clipId: clipId, volume: volume)
+                    } catch {
+                        NSSound.beep()
+                    }
+                }
+            },
+            onToggleTrackMuteRequested: { trackId in
+                Task {
+                    do {
+                        try await store.toggleTrackMute(trackId: trackId)
+                    } catch {
+                        NSSound.beep()
+                    }
+                }
+            },
+            onToggleTrackSoloRequested: { trackId in
+                Task {
+                    do {
+                        try await store.toggleTrackSolo(trackId: trackId)
+                    } catch {
+                        NSSound.beep()
+                    }
+                }
+            },
             onDeleteClipRequested: { clipId in
                 Task {
                     do {
@@ -924,10 +1281,12 @@ private struct TimelineRepresentable: NSViewRepresentable {
     let project: Project
     let playheadSeconds: Double
     let playerRate: Float
+    let isAudioComponentsExpanded: Bool
     let selectedClipIds: Set<UUID>
     let primarySelectedClipId: UUID?
     let rangeInSeconds: Double?
     let rangeOutSeconds: Double?
+    let onAddAssetToTimelineRequested: (UUID, Double, Int?) -> Void
     let onSelectionChanged: (Set<UUID>, UUID?) -> Void
     let onMoveClipCommitted: (UUID, Double) -> Void
     let onMoveClipsCommitted: ([(clipId: UUID, startSeconds: Double)]) -> Void
@@ -937,6 +1296,9 @@ private struct TimelineRepresentable: NSViewRepresentable {
     let onSeekRequested: (Double) -> Void
     let onSetPlaybackRateRequested: (Float) -> Void
     let onSplitClipRequested: (UUID, Double) -> Void
+    let onSetClipVolumeRequested: (UUID, Double) -> Void
+    let onToggleTrackMuteRequested: (UUID) -> Void
+    let onToggleTrackSoloRequested: (UUID) -> Void
     let onDeleteClipRequested: (UUID) -> Void
     let onDeleteClipsRequested: ([UUID]) -> Void
     let onRippleDeleteClipsRequested: ([UUID]) -> Void
@@ -947,6 +1309,7 @@ private struct TimelineRepresentable: NSViewRepresentable {
 
     func makeNSView(context: Context) -> NSScrollView {
         let timelineView = TimelineNSView()
+        timelineView.onAddAssetToTimelineRequested = onAddAssetToTimelineRequested
         timelineView.onSelectionChanged = onSelectionChanged
         timelineView.onMoveClipCommitted = onMoveClipCommitted
         timelineView.onMoveClipsCommitted = onMoveClipsCommitted
@@ -956,6 +1319,9 @@ private struct TimelineRepresentable: NSViewRepresentable {
         timelineView.onSeekRequested = onSeekRequested
         timelineView.onSetPlaybackRateRequested = onSetPlaybackRateRequested
         timelineView.onSplitClipRequested = onSplitClipRequested
+        timelineView.onSetClipVolumeRequested = onSetClipVolumeRequested
+        timelineView.onToggleTrackMuteRequested = onToggleTrackMuteRequested
+        timelineView.onToggleTrackSoloRequested = onToggleTrackSoloRequested
         timelineView.onDeleteClipRequested = onDeleteClipRequested
         timelineView.onDeleteClipsRequested = onDeleteClipsRequested
         timelineView.onRippleDeleteClipsRequested = onRippleDeleteClipsRequested
@@ -970,6 +1336,9 @@ private struct TimelineRepresentable: NSViewRepresentable {
         scroll.drawsBackground = false
         scroll.documentView = timelineView
 
+        scroll.contentView.postsBoundsChangedNotifications = true
+        context.coordinator.attach(scrollView: scroll, timelineView: timelineView)
+
         context.coordinator.timelineView = timelineView
         return scroll
     }
@@ -982,6 +1351,8 @@ private struct TimelineRepresentable: NSViewRepresentable {
         timelineView.project = project
         timelineView.playheadSeconds = playheadSeconds
         timelineView.playerRate = playerRate
+        timelineView.isAudioComponentsExpanded = isAudioComponentsExpanded
+        timelineView.onAddAssetToTimelineRequested = onAddAssetToTimelineRequested
 
         timelineView.setSelection(selected: selectedClipIds, primary: primarySelectedClipId, notify: false)
 
@@ -996,6 +1367,9 @@ private struct TimelineRepresentable: NSViewRepresentable {
         timelineView.onSeekRequested = onSeekRequested
         timelineView.onSetPlaybackRateRequested = onSetPlaybackRateRequested
         timelineView.onSplitClipRequested = onSplitClipRequested
+        timelineView.onSetClipVolumeRequested = onSetClipVolumeRequested
+        timelineView.onToggleTrackMuteRequested = onToggleTrackMuteRequested
+        timelineView.onToggleTrackSoloRequested = onToggleTrackSoloRequested
         timelineView.onDeleteClipRequested = onDeleteClipRequested
         timelineView.onDeleteClipsRequested = onDeleteClipsRequested
         timelineView.onRippleDeleteClipsRequested = onRippleDeleteClipsRequested
@@ -1015,18 +1389,57 @@ private struct TimelineRepresentable: NSViewRepresentable {
 
     final class Coordinator {
         var timelineView: TimelineNSView?
+
+        private var boundsObserver: NSObjectProtocol?
+
+        @MainActor
+        func attach(scrollView: NSScrollView, timelineView: TimelineNSView) {
+            if boundsObserver != nil { return }
+            boundsObserver = NotificationCenter.default.addObserver(
+                forName: NSView.boundsDidChangeNotification,
+                object: scrollView.contentView,
+                queue: .main
+            ) { [weak timelineView, weak scrollView] _ in
+                guard let timelineView, let scrollView else { return }
+                Task { @MainActor in
+                    timelineView.handleViewportChanged(scrollView: scrollView)
+                }
+            }
+        }
+
+        deinit {
+            if let boundsObserver {
+                NotificationCenter.default.removeObserver(boundsObserver)
+            }
+        }
     }
 }
 
 private final class TimelineNSView: NSView {
-    var project: Project = Project(meta: ProjectMeta(name: "Yunqi")) {
+    var project: Project = Project(meta: ProjectMeta(name: L("app.name"))) {
         didSet {
             window?.invalidateCursorRects(for: self)
             pruneMiniCaches()
         }
     }
+
+    private func invalidateCursorRectsForSelf() {
+        if let window {
+            window.invalidateCursorRects(for: self)
+        } else {
+            discardCursorRects()
+        }
+    }
     var playheadSeconds: Double = 0
     var playerRate: Float = 0
+
+    var isAudioComponentsExpanded: Bool = true {
+        didSet {
+            if oldValue != isAudioComponentsExpanded {
+                needsDisplay = true
+            }
+        }
+    }
     var onMoveClipCommitted: ((UUID, Double) -> Void)?
     var onMoveClipsCommitted: (([(clipId: UUID, startSeconds: Double)]) -> Void)?
     var onTrimClipCommitted: ((UUID, Double?, Double?, Double?) -> Void)?
@@ -1036,11 +1449,15 @@ private final class TimelineNSView: NSView {
     var onSeekRequested: ((Double) -> Void)?
     var onSetPlaybackRateRequested: ((Float) -> Void)?
     var onSplitClipRequested: ((UUID, Double) -> Void)?
+    var onSetClipVolumeRequested: ((UUID, Double) -> Void)?
+    var onToggleTrackMuteRequested: ((UUID) -> Void)?
+    var onToggleTrackSoloRequested: ((UUID) -> Void)?
     var onDeleteClipRequested: ((UUID) -> Void)?
     var onDeleteClipsRequested: (([UUID]) -> Void)?
     var onRippleDeleteClipsRequested: (([UUID]) -> Void)?
     var onRangeChanged: ((Double?, Double?) -> Void)?
     var onRippleDeleteRangeRequested: ((Double, Double) -> Void)?
+    var onAddAssetToTimelineRequested: ((UUID, Double, Int?) -> Void)?
 
     private var selectedClipIds: Set<UUID> = []
     private var primarySelectedClipId: UUID?
@@ -1058,9 +1475,14 @@ private final class TimelineNSView: NSView {
         rangeInSeconds = inSeconds
         rangeOutSeconds = outSeconds
         rangeDraggingStartSeconds = nil
+        if normalizedRange() == nil {
+            rangeHoveredBoundary = nil
+        }
         if notify {
             onRangeChanged?(rangeInSeconds, rangeOutSeconds)
         }
+        invalidateCursorRectsForSelf()
+        updateTrackingAreas()
         needsDisplay = true
     }
     private var dragging: DragState?
@@ -1073,10 +1495,30 @@ private final class TimelineNSView: NSView {
     private var snapGuideSeconds: Double? = nil
     private var snappingEnabled: Bool = true
 
+    // External asset drag preview (from sidebar)
+    private var externalDropPreviewSeconds: Double? = nil
+
     private var rangeToolEnabled: Bool = false
     private var rangeInSeconds: Double? = nil
     private var rangeOutSeconds: Double? = nil
     private var rangeDraggingStartSeconds: Double? = nil
+    private var rangeDraggingMovesIn: Bool = false
+
+    private enum RangeBoundaryHover {
+        case rangeIn
+        case rangeOut
+    }
+
+    private var rangeTrackingArea: NSTrackingArea?
+    private var rangeHoveredBoundary: RangeBoundaryHover? = nil
+
+    private struct JKLKeysDown {
+        var j: Bool = false
+        var k: Bool = false
+        var l: Bool = false
+    }
+
+    private var jklKeysDown: JKLKeysDown = JKLKeysDown()
 
     private enum DragMode {
         case move
@@ -1109,7 +1551,241 @@ private final class TimelineNSView: NSView {
 
     override var isFlipped: Bool { true }
 
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        registerForDraggedTypes([
+            .string,
+            NSPasteboard.PasteboardType(UTType.utf8PlainText.identifier),
+            NSPasteboard.PasteboardType(UTType.utf16PlainText.identifier),
+            NSPasteboard.PasteboardType(UTType.plainText.identifier),
+            NSPasteboard.PasteboardType(UTType.text.identifier)
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        registerForDraggedTypes([
+            .string,
+            NSPasteboard.PasteboardType(UTType.utf8PlainText.identifier),
+            NSPasteboard.PasteboardType(UTType.utf16PlainText.identifier),
+            NSPasteboard.PasteboardType(UTType.plainText.identifier),
+            NSPasteboard.PasteboardType(UTType.text.identifier)
+        ])
+    }
+
+    func handleViewportChanged(scrollView: NSScrollView) {
+        resizeToFit(scrollView: scrollView)
+        needsDisplay = true
+        invalidateCursorRectsForSelf()
+        updateTrackingAreas()
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        // When the window is resized, AppKit may not always trigger a full redraw of newly exposed areas
+        // for our custom-scrolling NSView. Force a redraw and refresh hover/cursor affordances.
+        needsDisplay = true
+        invalidateCursorRectsForSelf()
+        updateTrackingAreas()
+    }
+
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        needsDisplay = true
+        invalidateCursorRectsForSelf()
+        updateTrackingAreas()
+    }
+
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.acceptsMouseMovedEvents = true
+    }
+
+    private func assetIdFromDraggingPasteboard(_ pb: NSPasteboard) -> UUID? {
+        func normalize(_ raw: String) -> String {
+            var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            if s.hasPrefix("urn:uuid:") {
+                s = String(s.dropFirst("urn:uuid:".count))
+            }
+            if s.hasPrefix("{") && s.hasSuffix("}") && s.count > 2 {
+                s = String(s.dropFirst().dropLast())
+            }
+            return s.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let candidateTypes: [NSPasteboard.PasteboardType] = [
+            .string,
+            NSPasteboard.PasteboardType(UTType.utf8PlainText.identifier),
+            NSPasteboard.PasteboardType(UTType.utf16PlainText.identifier),
+            NSPasteboard.PasteboardType(UTType.plainText.identifier),
+            NSPasteboard.PasteboardType(UTType.text.identifier)
+        ]
+
+        for t in candidateTypes {
+            if let raw = pb.string(forType: t) {
+                let s = normalize(raw)
+                if let id = UUID(uuidString: s) {
+                    return id
+                }
+            }
+        }
+
+        if let objs = pb.readObjects(forClasses: [NSString.self], options: nil) as? [NSString],
+           let first = objs.first
+        {
+            let s = normalize(first as String)
+            if let id = UUID(uuidString: s) {
+                return id
+            }
+        }
+
+        #if DEBUG
+        let types = pb.types?.map { $0.rawValue }.joined(separator: ", ") ?? "(nil)"
+        NSLog("[DND] Could not decode asset UUID. Pasteboard types: \(types)")
+        #endif
+
+        return nil
+    }
+
+    private func isDragFromSidebarAsset(_ sender: NSDraggingInfo) -> Bool {
+        assetIdFromDraggingPasteboard(sender.draggingPasteboard) != nil
+    }
+
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        if isDragFromSidebarAsset(sender) {
+            return .copy
+        }
+        return []
+    }
+
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard isDragFromSidebarAsset(sender) else {
+            externalDropPreviewSeconds = nil
+            snapGuideSeconds = nil
+            needsDisplay = true
+            return []
+        }
+
+        let pointInView = convert(sender.draggingLocation, from: nil)
+        let proposed = max(0, seconds(atX: pointInView.x))
+        let optionDown = NSEvent.modifierFlags.contains(.option)
+        let snap = snapStartSeconds(proposed, movingClipIds: [], snappingEnabled: snappingEnabled && !optionDown)
+
+        externalDropPreviewSeconds = snap.value
+        snapGuideSeconds = snap.target
+        needsDisplay = true
+        return .copy
+    }
+
+        override func draggingExited(_ sender: NSDraggingInfo?) {
+            externalDropPreviewSeconds = nil
+            snapGuideSeconds = nil
+            needsDisplay = true
+        }
+
+        override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+            let pb = sender.draggingPasteboard
+            guard let assetId = assetIdFromDraggingPasteboard(pb) else {
+                return false
+            }
+
+            let pointInView = convert(sender.draggingLocation, from: nil)
+            let proposed = max(0, seconds(atX: pointInView.x))
+            let optionDown = NSEvent.modifierFlags.contains(.option)
+            let snap = snapStartSeconds(proposed, movingClipIds: [], snappingEnabled: snappingEnabled && !optionDown)
+            let timeSeconds = snap.value
+
+            onAddAssetToTimelineRequested?(assetId, timeSeconds, nil)
+            externalDropPreviewSeconds = nil
+            snapGuideSeconds = nil
+            needsDisplay = true
+            return true
+        }
+
+        override func concludeDragOperation(_ sender: NSDraggingInfo?) {
+            externalDropPreviewSeconds = nil
+            snapGuideSeconds = nil
+            needsDisplay = true
+        }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+
+        if let rangeTrackingArea {
+            removeTrackingArea(rangeTrackingArea)
+            self.rangeTrackingArea = nil
+        }
+
+        let shouldTrack = rangeToolEnabled && normalizedRange() != nil
+        if shouldTrack {
+            let opts: NSTrackingArea.Options = [
+                .activeInKeyWindow,
+                .mouseMoved,
+                .mouseEnteredAndExited,
+                .inVisibleRect
+            ]
+            let area = NSTrackingArea(rect: .zero, options: opts, owner: self, userInfo: nil)
+            addTrackingArea(area)
+            rangeTrackingArea = area
+        } else {
+            rangeHoveredBoundary = nil
+        }
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        guard rangeToolEnabled, let (a, b) = normalizedRange() else {
+            if rangeHoveredBoundary != nil {
+                rangeHoveredBoundary = nil
+                invalidateCursorRectsForSelf()
+                needsDisplay = true
+            }
+            super.mouseMoved(with: event)
+            return
+        }
+
+        let point = convert(event.locationInWindow, from: nil)
+        guard point.x >= laneX else {
+            if rangeHoveredBoundary != nil {
+                rangeHoveredBoundary = nil
+                invalidateCursorRectsForSelf()
+                needsDisplay = true
+            }
+            super.mouseMoved(with: event)
+            return
+        }
+
+        let s = seconds(atX: point.x)
+        let grabThresholdSeconds = Double(max(handleHitWidthPx, snapThresholdPx) / pxPerSecond)
+
+        let hovered: RangeBoundaryHover?
+        if abs(s - a) <= grabThresholdSeconds {
+            hovered = .rangeIn
+        } else if abs(s - b) <= grabThresholdSeconds {
+            hovered = .rangeOut
+        } else {
+            hovered = nil
+        }
+
+        if hovered != rangeHoveredBoundary {
+            rangeHoveredBoundary = hovered
+            invalidateCursorRectsForSelf()
+            needsDisplay = true
+        }
+
+        super.mouseMoved(with: event)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        if rangeHoveredBoundary != nil {
+            rangeHoveredBoundary = nil
+            invalidateCursorRectsForSelf()
+            needsDisplay = true
+        }
+        super.mouseExited(with: event)
+    }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
@@ -1126,10 +1802,56 @@ private final class TimelineNSView: NSView {
         // Range selection drag (when tool enabled)
         if rangeToolEnabled, point.x >= laneX, event.clickCount == 1 {
             let s = seconds(atX: point.x)
-            rangeDraggingStartSeconds = s
-            rangeInSeconds = s
-            rangeOutSeconds = s
+            if let (a, b) = normalizedRange() {
+                // If the mouse is near an existing boundary, adjust that boundary even if outside the range.
+                let grabThresholdSeconds = Double(max(handleHitWidthPx, snapThresholdPx) / pxPerSecond)
+
+                if abs(s - a) <= grabThresholdSeconds {
+                    // Near In
+                    rangeDraggingMovesIn = true
+                    rangeDraggingStartSeconds = b
+                    rangeInSeconds = s
+                    rangeOutSeconds = b
+                } else if abs(s - b) <= grabThresholdSeconds {
+                    // Near Out
+                    rangeDraggingMovesIn = false
+                    rangeDraggingStartSeconds = a
+                    rangeInSeconds = a
+                    rangeOutSeconds = s
+                } else if s >= a, s <= b {
+                    // Inside range: pick the nearer boundary as the moving edge.
+                    let distToIn = abs(s - a)
+                    let distToOut = abs(s - b)
+                    if distToIn <= distToOut {
+                        // Move in, anchor at out.
+                        rangeDraggingMovesIn = true
+                        rangeDraggingStartSeconds = b
+                        rangeInSeconds = s
+                        rangeOutSeconds = b
+                    } else {
+                        // Move out, anchor at in.
+                        rangeDraggingMovesIn = false
+                        rangeDraggingStartSeconds = a
+                        rangeInSeconds = a
+                        rangeOutSeconds = s
+                    }
+                } else {
+                    // Outside and not near boundary: create a new range.
+                    rangeDraggingMovesIn = false
+                    rangeDraggingStartSeconds = s
+                    rangeInSeconds = s
+                    rangeOutSeconds = s
+                }
+            } else {
+                // Create a new range.
+                rangeDraggingMovesIn = false
+                rangeDraggingStartSeconds = s
+                rangeInSeconds = s
+                rangeOutSeconds = s
+            }
             onRangeChanged?(rangeInSeconds, rangeOutSeconds)
+
+            snapGuideSeconds = nil
 
             // Cancel other interactions
             dragging = nil
@@ -1242,10 +1964,23 @@ private final class TimelineNSView: NSView {
     override func mouseDragged(with event: NSEvent) {
         if let start = rangeDraggingStartSeconds {
             let point = convert(event.locationInWindow, from: nil)
-            let s = seconds(atX: point.x)
-            rangeInSeconds = start
-            rangeOutSeconds = s
+            var s = seconds(atX: point.x)
+            let snappingActive = snappingEnabled && !event.modifierFlags.contains(.option)
+            snapGuideSeconds = nil
+            if snappingActive {
+                let snap = snapStartSeconds(s, movingClipIds: [], snappingEnabled: true)
+                s = snap.value
+                snapGuideSeconds = snap.target
+            }
+            if rangeDraggingMovesIn {
+                rangeInSeconds = s
+                rangeOutSeconds = start
+            } else {
+                rangeInSeconds = start
+                rangeOutSeconds = s
+            }
             onRangeChanged?(rangeInSeconds, rangeOutSeconds)
+            invalidateCursorRectsForSelf()
             needsDisplay = true
             return
         }
@@ -1360,6 +2095,8 @@ private final class TimelineNSView: NSView {
     override func mouseUp(with event: NSEvent) {
         if rangeDraggingStartSeconds != nil {
             rangeDraggingStartSeconds = nil
+            rangeDraggingMovesIn = false
+            snapGuideSeconds = nil
             needsDisplay = true
             return
         }
@@ -1479,7 +2216,11 @@ private final class TimelineNSView: NSView {
         for (index, track) in project.timeline.tracks.enumerated() {
             let y = inset + CGFloat(index) * rowHeight
 
-            let label = "\(index)  \(track.kind.rawValue)"
+            var flags: [String] = []
+            if track.isMuted { flags.append("M") }
+            if track.isSolo { flags.append("S") }
+            let suffix = flags.isEmpty ? "" : "  [\(flags.joined(separator: ","))]"
+            let label = "\(index)  \(track.kind.rawValue)\(suffix)"
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 12, weight: .medium),
                 .foregroundColor: NSColor.secondaryLabelColor
@@ -1494,15 +2235,77 @@ private final class TimelineNSView: NSView {
                 // Mini thumbnails / waveforms.
                 switch track.kind {
                 case .video:
-                    drawVideoThumbnails(in: rect, clip: clip)
+                    if isAudioComponentsExpanded {
+                        // Final Cut-style: show audio as an embedded component lane inside the video clip.
+                        let minAudioComponentHeight: CGFloat = 10
+                        let audioH = min(rect.height * 0.45, rect.height - 8)
+                        if audioH >= minAudioComponentHeight {
+                            let audioRect = CGRect(x: rect.minX, y: rect.maxY - audioH, width: rect.width, height: audioH)
+                            let videoRect = CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: max(0, rect.height - audioH))
+
+                            drawVideoThumbnails(in: videoRect, clip: clip)
+
+                            let anySolo = project.timeline.tracks.contains { $0.isSolo }
+                            let audible = (!track.isMuted) && (!anySolo || track.isSolo)
+                            if let ctx {
+                                ctx.saveGState()
+                                if !audible {
+                                    ctx.setAlpha(0.25)
+                                }
+                                drawAudioWaveform(in: audioRect, clip: clip)
+                                ctx.restoreGState()
+                            } else {
+                                drawAudioWaveform(in: audioRect, clip: clip)
+                            }
+
+                            // Divider line between video and audio components.
+                            ctx?.setStrokeColor(NSColor.systemBlue.withAlphaComponent(0.20).cgColor)
+                            ctx?.setLineWidth(1)
+                            ctx?.move(to: CGPoint(x: rect.minX, y: audioRect.minY))
+                            ctx?.addLine(to: CGPoint(x: rect.maxX, y: audioRect.minY))
+                            ctx?.strokePath()
+                        } else {
+                            drawVideoThumbnails(in: rect, clip: clip)
+                        }
+                    } else {
+                        // Collapsed: fill the whole clip with video thumbnails.
+                        drawVideoThumbnails(in: rect, clip: clip)
+                    }
                 case .audio:
-                    drawAudioWaveform(in: rect, clip: clip)
+                    if isAudioComponentsExpanded {
+                        // Fade waveform when audio is effectively not audible.
+                        let anySolo = project.timeline.tracks.contains { $0.isSolo }
+                        let audible = (!track.isMuted) && (!anySolo || track.isSolo)
+                        if let ctx {
+                            ctx.saveGState()
+                            if !audible {
+                                ctx.setAlpha(0.25)
+                            }
+                            drawAudioWaveform(in: rect, clip: clip)
+                            ctx.restoreGState()
+                        } else {
+                            drawAudioWaveform(in: rect, clip: clip)
+                        }
+                    }
                 default:
                     break
                 }
 
                 ctx?.setStrokeColor(NSColor.systemBlue.withAlphaComponent(0.6).cgColor)
                 ctx?.stroke(rect, width: 1)
+
+                // Audio gain label (only when not default).
+                if abs(clip.volume - 1.0) > 1e-9 {
+                    let v = max(0, min(2.0, clip.volume))
+                    let text = String(format: "%.0f%%", v * 100)
+                    let attrs: [NSAttributedString.Key: Any] = [
+                        .font: NSFont.systemFont(ofSize: 10, weight: .semibold),
+                        .foregroundColor: NSColor.secondaryLabelColor
+                    ]
+                    let size = (text as NSString).size(withAttributes: attrs)
+                    let p = CGPoint(x: rect.maxX - size.width - 4, y: rect.minY + 2)
+                    text.draw(at: p, withAttributes: attrs)
+                }
 
                 if selectedClipIds.contains(clip.id) {
                     ctx?.setStrokeColor(NSColor.selectedControlColor.cgColor)
@@ -1544,10 +2347,24 @@ private final class TimelineNSView: NSView {
             ctx.setFillColor(NSColor.systemYellow.withAlphaComponent(0.12).cgColor)
             ctx.fill(band)
 
-            ctx.setStrokeColor(NSColor.systemYellow.withAlphaComponent(0.70).cgColor)
-            ctx.setLineWidth(1)
+            let baseColor = NSColor.systemYellow
+            let baseAlpha: CGFloat = 0.70
+            let hoverAlpha: CGFloat = 0.95
+            let baseWidth: CGFloat = 1
+            let hoverWidth: CGFloat = 2
+
+            let hover = rangeHoveredBoundary
+
+            // In boundary
+            ctx.setStrokeColor(baseColor.withAlphaComponent(hover == .rangeIn ? hoverAlpha : baseAlpha).cgColor)
+            ctx.setLineWidth(hover == .rangeIn ? hoverWidth : baseWidth)
             ctx.move(to: CGPoint(x: band.minX + 0.5, y: band.minY))
             ctx.addLine(to: CGPoint(x: band.minX + 0.5, y: band.maxY))
+            ctx.strokePath()
+
+            // Out boundary
+            ctx.setStrokeColor(baseColor.withAlphaComponent(hover == .rangeOut ? hoverAlpha : baseAlpha).cgColor)
+            ctx.setLineWidth(hover == .rangeOut ? hoverWidth : baseWidth)
             ctx.move(to: CGPoint(x: band.maxX - 0.5, y: band.minY))
             ctx.addLine(to: CGPoint(x: band.maxX - 0.5, y: band.maxY))
             ctx.strokePath()
@@ -1573,6 +2390,18 @@ private final class TimelineNSView: NSView {
             ctx?.fill(line)
         }
 
+        // External drop preview line (drawn in timeline area)
+        if let preview = externalDropPreviewSeconds, let ctx {
+            let px = laneX + CGFloat(max(0, preview)) * pxPerSecond
+            if px >= laneX - 2, px <= bounds.maxX + 2 {
+                ctx.setStrokeColor(NSColor.selectedControlColor.withAlphaComponent(0.55).cgColor)
+                ctx.setLineWidth(1)
+                ctx.move(to: CGPoint(x: px, y: inset))
+                ctx.addLine(to: CGPoint(x: px, y: bounds.maxY - inset))
+                ctx.strokePath()
+            }
+        }
+
         // Snap guide overlay (drawn in timeline area)
         if let snap = snapGuideSeconds {
             let gx = laneX + CGFloat(max(0, snap)) * pxPerSecond
@@ -1586,7 +2415,7 @@ private final class TimelineNSView: NSView {
         }
 
         if project.timeline.tracks.isEmpty {
-            let text = "Timeline (placeholder)\nUse + Video Track to add a track."
+            let text = L("ui.timeline.placeholder")
             let attrs: [NSAttributedString.Key: Any] = [
                 .font: NSFont.systemFont(ofSize: 13),
                 .foregroundColor: NSColor.secondaryLabelColor
@@ -1608,6 +2437,18 @@ private final class TimelineNSView: NSView {
                 addCursorRect(leftHandle, cursor: .resizeLeftRight)
                 addCursorRect(rightHandle, cursor: .resizeLeftRight)
             }
+        }
+
+        // Range boundary resize cursor (discoverability)
+        if rangeToolEnabled, let (a, b) = normalizedRange() {
+            let handleW = handleHitWidthPx
+            let xIn = laneX + CGFloat(max(0, a)) * pxPerSecond
+            let xOut = laneX + CGFloat(max(0, b)) * pxPerSecond
+
+            let inHandle = CGRect(x: xIn - handleW / 2, y: 0, width: handleW, height: bounds.height)
+            let outHandle = CGRect(x: xOut - handleW / 2, y: 0, width: handleW, height: bounds.height)
+            addCursorRect(inHandle, cursor: .resizeLeftRight)
+            addCursorRect(outHandle, cursor: .resizeLeftRight)
         }
     }
 
@@ -1638,6 +2479,43 @@ private final class TimelineNSView: NSView {
     }
 
     override func keyDown(with event: NSEvent) {
+        // Track mute/solo (Control+M / Control+S)
+        if event.modifierFlags.contains(.control),
+           let chars = event.charactersIgnoringModifiers?.lowercased(),
+           chars.count == 1
+        {
+            let t = playheadSeconds
+            if chars == "m" {
+                if let trackId = trackIdForPrimaryOrPlayhead(timeSeconds: t) {
+                    onToggleTrackMuteRequested?(trackId)
+                    return
+                }
+            }
+            if chars == "s" {
+                if let trackId = trackIdForPrimaryOrPlayhead(timeSeconds: t) {
+                    onToggleTrackSoloRequested?(trackId)
+                    return
+                }
+            }
+        }
+
+        // Clip volume (Option +/-)
+        if event.modifierFlags.contains(.option),
+           !event.modifierFlags.contains(.command),
+           let chars = event.charactersIgnoringModifiers,
+           chars.count == 1
+        {
+            let key = chars
+            if key == "=" || key == "+" {
+                adjustClipVolumeAtPlayhead(delta: 0.1)
+                return
+            }
+            if key == "-" {
+                adjustClipVolumeAtPlayhead(delta: -0.1)
+                return
+            }
+        }
+
         // Cmd +/- zoom
         if event.modifierFlags.contains(.command),
            let chars = event.charactersIgnoringModifiers?.lowercased(),
@@ -1667,6 +2545,11 @@ private final class TimelineNSView: NSView {
         if let chars = event.charactersIgnoringModifiers?.lowercased(), chars == "r" {
             rangeToolEnabled.toggle()
             rangeDraggingStartSeconds = nil
+            if !rangeToolEnabled {
+                rangeHoveredBoundary = nil
+            }
+            invalidateCursorRectsForSelf()
+            updateTrackingAreas()
             needsDisplay = true
             return
         }
@@ -1741,8 +2624,13 @@ private final class TimelineNSView: NSView {
             return
         case "b", "s":
             // Split (razor): prefer Cmd+B behavior but also allow plain B/S when timeline has focus.
-            if let id = primarySelectedClipId {
-                let t = playheadSeconds
+            // IMPORTANT: Don't intercept Cmd+B / Shift+Cmd+B here; let menu shortcuts handle them
+            // so we can support Final Cut-style "Blade" vs "Blade All" behavior.
+            if event.modifierFlags.contains(.command) {
+                break
+            }
+            let t = playheadSeconds
+            if let id = primarySelectedClipId ?? clipIdIntersectingPlayhead(timeSeconds: t) {
                 onSplitClipRequested?(id, t)
                 return
             }
@@ -1756,11 +2644,34 @@ private final class TimelineNSView: NSView {
             clearRangeSelection(notify: true)
             return
         case "j":
-            // Reverse (if supported); otherwise acts as a "request".
+            jklKeysDown.j = true
+            // If K is held, play at half-speed (Final Cut-style).
+            if jklKeysDown.k {
+                onSetPlaybackRateRequested?(-0.5)
+                return
+            }
+            // Repeat should advance the shuttle speed; this is already handled by nextJKLRate.
             onSetPlaybackRateRequested?(nextJKLRate(direction: -1))
         case "k":
+            jklKeysDown.k = true
+            // Holding K acts like a momentary stop, unless combined with J/L for half-speed.
+            if jklKeysDown.j {
+                onSetPlaybackRateRequested?(-0.5)
+                return
+            }
+            if jklKeysDown.l {
+                onSetPlaybackRateRequested?(0.5)
+                return
+            }
             onSetPlaybackRateRequested?(0)
         case "l":
+            jklKeysDown.l = true
+            // If K is held, play at half-speed (Final Cut-style).
+            if jklKeysDown.k {
+                onSetPlaybackRateRequested?(0.5)
+                return
+            }
+            // Repeat should advance the shuttle speed; this is already handled by nextJKLRate.
             onSetPlaybackRateRequested?(nextJKLRate(direction: 1))
         case ",":
             stepFrames(-1)
@@ -1769,6 +2680,96 @@ private final class TimelineNSView: NSView {
         default:
             super.keyDown(with: event)
         }
+    }
+
+    private func adjustClipVolumeAtPlayhead(delta: Double) {
+        let t = playheadSeconds
+        guard let clipId = primarySelectedClipId ?? clipIdContaining(timeSeconds: t) else {
+            NSSound.beep()
+            return
+        }
+
+        let current = clipVolume(clipId: clipId) ?? 1.0
+        let next = max(0, min(2.0, current + delta))
+        onSetClipVolumeRequested?(clipId, next)
+    }
+
+    private func clipIdContaining(timeSeconds t: Double) -> UUID? {
+        for track in project.timeline.tracks {
+            for clip in track.clips {
+                let start = clip.timelineStartSeconds
+                let end = start + clip.durationSeconds
+                guard t >= start, t <= end else { continue }
+                return clip.id
+            }
+        }
+        return nil
+    }
+
+    private func trackIdForPrimaryOrPlayhead(timeSeconds t: Double) -> UUID? {
+        if let primarySelectedClipId {
+            for track in project.timeline.tracks {
+                if track.clips.contains(where: { $0.id == primarySelectedClipId }) {
+                    return track.id
+                }
+            }
+        }
+        for track in project.timeline.tracks {
+            for clip in track.clips {
+                let start = clip.timelineStartSeconds
+                let end = start + clip.durationSeconds
+                guard t >= start, t <= end else { continue }
+                return track.id
+            }
+        }
+        return nil
+    }
+
+    private func clipVolume(clipId: UUID) -> Double? {
+        for track in project.timeline.tracks {
+            if let clip = track.clips.first(where: { $0.id == clipId }) {
+                return clip.volume
+            }
+        }
+        return nil
+    }
+
+    override func keyUp(with event: NSEvent) {
+        if let chars = event.charactersIgnoringModifiers?.lowercased(), chars.count == 1 {
+            let key = chars
+            if key == "j" {
+                jklKeysDown.j = false
+            } else if key == "k" {
+                jklKeysDown.k = false
+            } else if key == "l" {
+                jklKeysDown.l = false
+            } else {
+                super.keyUp(with: event)
+                return
+            }
+
+            // Recompute desired rate based on remaining held keys.
+            if jklKeysDown.k {
+                if jklKeysDown.j {
+                    onSetPlaybackRateRequested?(-0.5)
+                } else if jklKeysDown.l {
+                    onSetPlaybackRateRequested?(0.5)
+                } else {
+                    onSetPlaybackRateRequested?(0)
+                }
+            } else {
+                if jklKeysDown.j {
+                    onSetPlaybackRateRequested?(nextJKLRate(direction: -1))
+                } else if jklKeysDown.l {
+                    onSetPlaybackRateRequested?(nextJKLRate(direction: 1))
+                } else {
+                    onSetPlaybackRateRequested?(0)
+                }
+            }
+            return
+        }
+
+        super.keyUp(with: event)
     }
 
     // MARK: - Range selection helpers
@@ -1790,6 +2791,8 @@ private final class TimelineNSView: NSView {
         if notify {
             onRangeChanged?(rangeInSeconds, rangeOutSeconds)
         }
+        invalidateCursorRectsForSelf()
+        updateTrackingAreas()
         needsDisplay = true
     }
 
@@ -1802,6 +2805,8 @@ private final class TimelineNSView: NSView {
         if notify {
             onRangeChanged?(rangeInSeconds, rangeOutSeconds)
         }
+        invalidateCursorRectsForSelf()
+        updateTrackingAreas()
         needsDisplay = true
     }
 
@@ -1809,9 +2814,13 @@ private final class TimelineNSView: NSView {
         rangeInSeconds = nil
         rangeOutSeconds = nil
         rangeDraggingStartSeconds = nil
+        rangeDraggingMovesIn = false
+        rangeHoveredBoundary = nil
         if notify {
             onRangeChanged?(nil, nil)
         }
+        invalidateCursorRectsForSelf()
+        updateTrackingAreas()
         needsDisplay = true
     }
 
@@ -1944,6 +2953,21 @@ private final class TimelineNSView: NSView {
         return nil
     }
 
+    private func clipIdIntersectingPlayhead(timeSeconds t: Double) -> UUID? {
+        for track in project.timeline.tracks {
+            for clip in track.clips {
+                let start = clip.timelineStartSeconds
+                let end = start + clip.durationSeconds
+                // Match EditorCore: must split strictly inside clip bounds, and avoid too-small results.
+                guard t > start, t < end else { continue }
+                if (t - start) < minClipDurationSeconds { continue }
+                if (end - t) < minClipDurationSeconds { continue }
+                return clip.id
+            }
+        }
+        return nil
+    }
+
     // MARK: - Geometry
 
     private let inset: CGFloat = 16
@@ -1977,6 +3001,7 @@ private final class TimelineNSView: NSView {
     private var waveformCache: [UUID: Waveform] = [:]
     private var thumbnailInFlight: Set<UUID> = []
     private var waveformInFlight: Set<UUID> = []
+    private var waveformNoAudio: Set<UUID> = []
 
     private func assetURL(for assetId: UUID) -> URL? {
         guard let record = project.mediaAssets.first(where: { $0.id == assetId }) else { return nil }
@@ -2038,6 +3063,21 @@ private final class TimelineNSView: NSView {
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
         let visible = enclosingScrollView?.contentView.bounds ?? bounds
         if !rect.intersects(visible) { return }
+
+        // Background for waveform area (helps separation from thumbnails/clip fill).
+        ctx.saveGState()
+        ctx.addRect(rect)
+        ctx.clip()
+        ctx.setFillColor(NSColor.controlBackgroundColor.withAlphaComponent(0.45).cgColor)
+        ctx.fill(rect)
+
+        // Center line.
+        ctx.setStrokeColor(NSColor.separatorColor.withAlphaComponent(0.35).cgColor)
+        ctx.setLineWidth(1)
+        ctx.move(to: CGPoint(x: rect.minX, y: rect.midY))
+        ctx.addLine(to: CGPoint(x: rect.maxX, y: rect.midY))
+        ctx.strokePath()
+        ctx.restoreGState()
 
         let desired = desiredWaveformCount(for: rect)
         if let cached = waveformCache[clip.id], cached.count >= desired, !cached.samples.isEmpty {
@@ -2114,6 +3154,7 @@ private final class TimelineNSView: NSView {
     private func ensureWaveform(for clip: Clip, desiredCount: Int) {
         if let cached = waveformCache[clip.id], cached.count >= desiredCount, !cached.samples.isEmpty { return }
         if waveformInFlight.contains(clip.id) { return }
+        if waveformNoAudio.contains(clip.id) { return }
         guard let url = assetURL(for: clip.assetId) else { return }
 
         waveformInFlight.insert(clip.id)
@@ -2128,8 +3169,12 @@ private final class TimelineNSView: NSView {
                 guard let self else { return }
                 self.waveformInFlight.remove(clipId)
                 if let samples {
+                    self.waveformNoAudio.remove(clipId)
                     self.waveformCache[clipId] = Waveform(count: desiredCount, samples: samples)
                     self.needsDisplay = true
+                } else {
+                    // Negative cache: avoid repeatedly probing audio tracks for video-only assets.
+                    self.waveformNoAudio.insert(clipId)
                 }
             }
         }
@@ -2244,6 +3289,7 @@ private final class TimelineNSView: NSView {
         waveformCache = waveformCache.filter { live.contains($0.key) }
         thumbnailInFlight = thumbnailInFlight.filter { live.contains($0) }
         waveformInFlight = waveformInFlight.filter { live.contains($0) }
+        waveformNoAudio = waveformNoAudio.filter { live.contains($0) }
     }
 
     private func resample(values: [Float], to count: Int) -> [Float] {
@@ -2592,6 +3638,18 @@ private final class TimelineNSView: NSView {
             caret.closeSubpath()
             ctx.addPath(caret)
             ctx.fillPath()
+        }
+
+        // External drop preview line in ruler
+        if let preview = externalDropPreviewSeconds {
+            let x = laneX + CGFloat(max(0, preview)) * pxPerSecond
+            if x >= visible.minX - 40, x <= visible.maxX + 40 {
+                ctx.setStrokeColor(NSColor.selectedControlColor.withAlphaComponent(0.45).cgColor)
+                ctx.setLineWidth(1)
+                ctx.move(to: CGPoint(x: x, y: rulerRect.minY))
+                ctx.addLine(to: CGPoint(x: x, y: rulerRect.maxY))
+                ctx.strokePath()
+            }
         }
 
         // Snap guide line in ruler (if active)

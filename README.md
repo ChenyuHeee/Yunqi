@@ -1,35 +1,89 @@
-# 云起（Yunqi）
+<p align="center">
+  <img src="AppResources/AppIcon-Timeline.svg" width="128" height="128" alt="Yunqi" />
+</p>
 
-面向 **Apple Silicon** 优化的 macOS 视频剪辑工具：专注“顺滑预览 + 高效时间线编辑”，让剪辑更轻、更快、更直觉。
+<h1 align="center">云起（Yunqi）</h1>
 
-- English: [README.en.md](README.en.md)
-- 更新记录： [CHANGELOG.md](CHANGELOG.md)
+<p align="center">
+  面向 <b>Apple Silicon</b> 优化的 macOS 视频剪辑工具：专注“顺滑预览 + 高效时间线编辑”。
+</p>
+
+<p align="center">
+  <a href="https://github.com/ChenyuHeee/Yunqi/releases"><img alt="GitHub release" src="https://img.shields.io/github/v/release/ChenyuHeee/Yunqi" /></a>
+  <a href="https://github.com/ChenyuHeee/Yunqi/blob/main/LICENSE"><img alt="License" src="https://img.shields.io/github/license/ChenyuHeee/Yunqi" /></a>
+  <a href="https://github.com/ChenyuHeee/Yunqi/stargazers"><img alt="Stars" src="https://img.shields.io/github/stars/ChenyuHeee/Yunqi" /></a>
+  <a href="https://github.com/ChenyuHeee/Yunqi/issues"><img alt="Issues" src="https://img.shields.io/github/issues/ChenyuHeee/Yunqi" /></a>
+  <a href="https://github.com/ChenyuHeee/Yunqi/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/ChenyuHeee/Yunqi" /></a>
+</p>
+
+<p align="center">
+  <a href="README.en.md"><img alt="English" src="https://img.shields.io/badge/English-README-181717?style=for-the-badge&logo=readme" /></a>
+  <a href="CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/更新记录-CHANGELOG-181717?style=for-the-badge&logo=github" /></a>
+  <a href="https://github.com/ChenyuHeee/Yunqi/releases"><img alt="Download" src="https://img.shields.io/badge/下载-Releases-181717?style=for-the-badge&logo=github" /></a>
+</p>
 
 ---
+
+## 截图
+
+> 你可以把截图放到 `docs/` 或 `assets/`，然后把链接补到这里。
 
 ## 亮点
 
 - **真实预览**：基于 AVFoundation 的播放与抽帧显示，能跟随时间线变更即时更新。
-- **时间线交互**：拖拽移动、左右边缘拖拽 Trim、吸附对齐，操作明确。
+- **时间线编辑**：拖拽移动、边缘 Trim、吸附对齐；支持 Final Cut 风格的 Blade / Blade All。
 - **撤销/重做**：编辑动作可回退、可恢复，适合快速试错。
-- **快捷键与播放控制**：支持 scrub 定位、逐帧前进/后退、J/K/L 播放控制、循环播放。
-- **工程化结构**：编辑核心与 UI 分层，多模块 SwiftPM 工程，便于持续迭代。
+- **快捷键友好**：J/K/L 播放控制、逐帧、循环等。
 
-## 当前能力（MVP）
+## 快捷键（常用）
 
-- 导入媒体（本地文件）并加入视频轨
-- 时间线：移动/Trim/吸附
-- 预览：播放、暂停、停止、scrub、逐帧、循环
+> 部分按键需要“时间线获得焦点”（点一下时间线区域即可）。
 
-## 运行（macOS App）
+- 播放/暂停：Space
+- 循环开关：⌘L
+- 逐帧：← / →（或 , / .）
+- 切刀（Blade）：⌘B
+- 全轨切刀（Blade All）：⇧⌘B
+- 删除（Ripple Delete）：Delete
 
-需要 macOS 13+，Swift 6。
+## 本地运行（开发者）
+
+需要 macOS 13+、Swift 6。
 
 - 构建：`swift build --product YunqiMacApp`
 - 启动（推荐）：`./run-macapp.sh`
 
-## 开发
+## GitHub Insights
+
+<p>
+  <a href="https://github.com/ChenyuHeee/Yunqi/pulse"><img alt="Pulse" src="https://img.shields.io/badge/Insights-Pulse-181717?style=for-the-badge&logo=github" /></a>
+  <a href="https://github.com/ChenyuHeee/Yunqi/activity"><img alt="Activity" src="https://img.shields.io/badge/Insights-Activity-181717?style=for-the-badge&logo=github" /></a>
+  <a href="https://github.com/ChenyuHeee/Yunqi/graphs/contributors"><img alt="Contributors" src="https://img.shields.io/badge/Insights-Contributors-181717?style=for-the-badge&logo=github" /></a>
+  <a href="https://github.com/ChenyuHeee/Yunqi/issues"><img alt="Issues" src="https://img.shields.io/badge/Track-Issues-181717?style=for-the-badge&logo=github" /></a>
+  <a href="https://github.com/ChenyuHeee/Yunqi/pulls"><img alt="Pull requests" src="https://img.shields.io/badge/Contribute-PRs-181717?style=for-the-badge&logo=github" /></a>
+</p>
+
+### Repo Cards
+
+[![Repo](https://github-readme-stats.vercel.app/api/pin/?username=ChenyuHeee&repo=Yunqi)](https://github.com/ChenyuHeee/Yunqi)
+
+[![Top Langs](https://github-readme-stats.vercel.app/api/top-langs/?username=ChenyuHeee&repo=Yunqi&layout=compact)](https://github.com/ChenyuHeee/Yunqi)
+
+### Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=ChenyuHeee/Yunqi&type=Date)](https://star-history.com/#ChenyuHeee/Yunqi&Date)
+
+### 贡献者
+
+[![Contributors](https://contrib.rocks/image?repo=ChenyuHeee/Yunqi)](https://github.com/ChenyuHeee/Yunqi/graphs/contributors)
+
+## 参与贡献
+
+- 提 Bug / 提需求：<https://github.com/ChenyuHeee/Yunqi/issues>
+- 提交 PR：<https://github.com/ChenyuHeee/Yunqi/pulls>
+
+## 开发备注
 
 - 测试：`swift test`
-- 项目设计与模块说明可参考：[/docs/prepare.md](docs/prepare.md)
+- 设计与模块说明： [docs/prepare.md](docs/prepare.md)
 

@@ -1,0 +1,99 @@
+/* YunqiMacApp UI strings */
+
+/* App */
+"app.name" = "云起";
+
+/* Menu sections */
+"menu.section.playback" = "播放";
+"menu.section.selection" = "选择";
+"menu.section.range" = "范围";
+"menu.section.timeline" = "时间线";
+"menu.section.clip" = "片段";
+
+/* File menu */
+"menu.file.newProject" = "新建项目";
+"menu.file.open" = "打开…";
+"menu.file.save" = "保存";
+"menu.file.saveAs" = "另存为…";
+"menu.file.importMedia" = "导入媒体…";
+"menu.file.export" = "导出…";
+
+/* Edit menu */
+"menu.edit.undo" = "撤销";
+"menu.edit.undoWithName" = "撤销 %@";
+"menu.edit.redo" = "重做";
+"menu.edit.redoWithName" = "重做 %@";
+
+/* Playback menu */
+"menu.playback.playPause" = "播放/暂停";
+"menu.playback.stop" = "停止";
+"menu.playback.toggleLoop" = "切换循环";
+
+/* Selection menu */
+"menu.selection.selectAll" = "全选";
+"menu.selection.deselect" = "取消选择";
+
+/* Range menu */
+"menu.range.setIn" = "设置入点";
+"menu.range.setOut" = "设置出点";
+"menu.range.clear" = "清除范围";
+"menu.range.rippleDeleteRange" = "波纹删除范围";
+
+/* Timeline menu */
+"menu.timeline.addVideoTrack" = "添加视频轨";
+"menu.timeline.addAudioTrack" = "添加音频轨";
+"menu.timeline.expandAudioComponents" = "展开音频组件";
+"menu.timeline.collapseAudioComponents" = "收起音频组件";
+"menu.timeline.toggleTrackMute" = "切换轨道静音";
+"menu.timeline.toggleTrackSolo" = "切换轨道独奏";
+
+/* Asset context menu */
+"menu.asset.rename" = "重命名";
+
+"menu.blade" = "切刀";
+"menu.bladeAll" = "全轨切刀";
+
+"menu.increaseClipVolume" = "增大片段音量";
+"menu.decreaseClipVolume" = "减小片段音量";
+
+"menu.rippleDelete" = "波纹删除";
+"menu.rippleDeleteN" = "波纹删除 %d 个片段";
+"menu.delete" = "删除";
+"menu.deleteN" = "删除 %d 个片段";
+
+/* Toolbar / main UI */
+"ui.toolbar.play" = "播放";
+"ui.toolbar.pause" = "暂停";
+"ui.toolbar.loop" = "循环";
+"ui.toolbar.exportPercent" = "导出 %.0f%%";
+"ui.toolbar.addVideoTrack" = "+ 视频轨";
+
+"ui.sidebar.fps" = "FPS：%.0f";
+"ui.sidebar.media" = "媒体";
+"ui.sidebar.noAssets" = "没有素材";
+"ui.sidebar.nameField" = "名称";
+"ui.sidebar.addToVideoTrack" = "添加到视频轨";
+
+"ui.sidebar.tracks" = "轨道";
+"ui.sidebar.noTracks" = "没有轨道";
+"ui.sidebar.clipsCount" = "片段：%d";
+
+"ui.preferences.newProjectOpenTarget" = "新建项目打开方式";
+"ui.preferences.openProjectOpenTarget" = "打开项目方式";
+"ui.openTarget.currentTab" = "当前标签";
+"ui.openTarget.newTab" = "新标签";
+"ui.openTarget.newWindow" = "新窗口（新页面）";
+
+"ui.timeline.placeholder" = "时间线（占位）\n使用“+ 视频轨”来添加轨道。";
+
+/* Alerts */
+"alert.saveChanges.message" = "要保存对“%@”所做的更改吗？";
+"alert.saveChanges.informative" = "如果不保存，更改将会丢失。";
+"alert.saveChanges.save" = "保存";
+"alert.saveChanges.dontSave" = "不保存";
+"alert.saveChanges.cancel" = "取消";
+
+/* Export status */
+"status.exporting" = "正在导出…";
+"status.exported" = "已导出：%@";
+"status.exportFailed" = "导出失败：%@";

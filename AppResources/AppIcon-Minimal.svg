@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="140" y1="120" x2="900" y2="940" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FAFC"/>
+      <stop offset="1" stop-color="#E2E8F0"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="260" y1="340" x2="780" y2="720" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#0F172A"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="380" y1="380" x2="740" y2="740" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7C3AED"/>
+      <stop offset="0.55" stop-color="#2563EB"/>
+      <stop offset="1" stop-color="#06B6D4"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect x="72" y="72" width="880" height="880" rx="196" fill="url(#bg)"/>
+
+  <!-- Minimal timeline glyph -->
+  <rect x="230" y="430" width="564" height="164" rx="82" fill="url(#ink)" opacity="0.92"/>
+
+  <!-- Clip blocks -->
+  <rect x="272" y="472" width="180" height="80" rx="28" fill="#FFFFFF" opacity="0.20"/>
+  <rect x="474" y="472" width="278" height="80" rx="28" fill="#FFFFFF" opacity="0.26"/>
+
+  <!-- Blade notch + playhead line (accent) -->
+  <rect x="500" y="362" width="24" height="320" rx="12" fill="url(#accent)"/>
+  <path d="M512 328l40 48h-80l40-48Z" fill="url(#accent)"/>
+
+  <!-- Bottom baseline -->
+  <rect x="300" y="656" width="424" height="22" rx="11" fill="#0F172A" opacity="0.12"/>
+</svg>

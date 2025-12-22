@@ -358,6 +358,7 @@ final class PreviewPlayerController {
     }
 
     private static func buildPlayerItem(for project: Project, allowDirectAsset: Bool) async -> PlayerItemBuildResult {
+        let timeScale: CMTimeScale = 60_000
         let composition = AVMutableComposition()
 
         let collected = await collectVideoSegments(project)
@@ -367,20 +368,112 @@ final class PreviewPlayerController {
         }
 
         guard !videoSegments.isEmpty else {
-            let clips = project.timeline.tracks.filter { $0.kind == .video }.flatMap { $0.clips }.count
+            let videoClipCount = project.timeline.tracks.filter { $0.kind == .video }.flatMap { $0.clips }.count
+
+            // Audio-only fallback: build an audio composition so playback still works.
+            let audioCollected = await collectAudioSegments(project)
+            let audioSegments = audioCollected.segments
+
+            if audioSegments.isEmpty {
+                let debug = ([
+                    "Preview build: no playable video segments",
+                    "videoClips=\(videoClipCount)",
+                    "audioClips=\(project.timeline.tracks.filter { $0.kind == .audio }.flatMap { $0.clips }.count)",
+                    "mediaAssets=\(project.mediaAssets.count)",
+                    (collected.warnings + audioCollected.warnings).isEmpty ? nil : ("warnings:\n" + (collected.warnings + audioCollected.warnings).joined(separator: "\n"))
+                ].compactMap { $0 }).joined(separator: "\n")
+                return PlayerItemBuildResult(item: AVPlayerItem(asset: composition), debug: debug)
+            }
+
+            // Partition audio segments into non-overlapping lanes (composition tracks).
+            var lanes: [[AudioSegment]] = []
+            for seg in audioSegments.sorted(by: { $0.start < $1.start }) {
+                var placed = false
+                for i in lanes.indices {
+                    if let last = lanes[i].last, last.end <= seg.start + 1e-9 {
+                        lanes[i].append(seg)
+                        placed = true
+                        break
+                    }
+                }
+                if !placed {
+                    lanes.append([seg])
+                }
+            }
+
+            let anySolo = project.timeline.tracks.contains { $0.isSolo }
+            let clipVolumeById: [UUID: Double] = Dictionary(uniqueKeysWithValues: project.timeline.tracks.flatMap { $0.clips }.map { ($0.id, $0.volume) })
+            let trackAudibleFactorById: [UUID: Double] = Dictionary(uniqueKeysWithValues: project.timeline.tracks.map { track in
+                let audible = (!track.isMuted) && (!anySolo || track.isSolo)
+                return (track.id, audible ? 1.0 : 0.0)
+            })
+
+            var inputParams: [AVMutableAudioMixInputParameters] = []
+            inputParams.reserveCapacity(lanes.count)
+
+            for lane in lanes {
+                guard let audioCompTrack = composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+                    continue
+                }
+
+                let params = AVMutableAudioMixInputParameters(track: audioCompTrack)
+
+                for seg in lane {
+                    let insertionTime = CMTime(seconds: seg.start, preferredTimescale: 600)
+                    let sourceRange = CMTimeRange(
+                        start: CMTime(seconds: seg.sourceIn, preferredTimescale: 600),
+                        duration: CMTime(seconds: seg.sourceDuration, preferredTimescale: 600)
+                    )
+
+                    do {
+                        try audioCompTrack.insertTimeRange(sourceRange, of: seg.assetAudioTrack, at: insertionTime)
+
+                        let insertedRange = CMTimeRange(start: insertionTime, duration: sourceRange.duration)
+                        let targetDuration = CMTime(seconds: seg.displayDuration, preferredTimescale: 600)
+                        if targetDuration != sourceRange.duration {
+                            audioCompTrack.scaleTimeRange(insertedRange, toDuration: targetDuration)
+                        }
+
+                        let clipVol = max(0, clipVolumeById[seg.clipId] ?? 1.0)
+                        let trackFactor = trackAudibleFactorById[seg.timelineTrackId] ?? 1.0
+                        let effective = Float(max(0, min(2.0, clipVol * trackFactor)))
+                        let displayRange = CMTimeRange(start: insertionTime, duration: targetDuration)
+                        params.setVolumeRamp(fromStartVolume: effective, toEndVolume: effective, timeRange: displayRange)
+                    } catch {
+                        continue
+                    }
+                }
+
+                inputParams.append(params)
+            }
+
+            let item = AVPlayerItem(asset: composition)
+            if !inputParams.isEmpty {
+                let audioMix = AVMutableAudioMix()
+                audioMix.inputParameters = inputParams
+                item.audioMix = audioMix
+            }
+
+            let totalDuration = audioSegments.map { $0.end }.max() ?? 0
             let debug = ([
-                "Preview build: no playable video segments",
-                "videoClips=\(clips)",
-                "mediaAssets=\(project.mediaAssets.count)",
-                collected.warnings.isEmpty ? nil : ("warnings:\n" + collected.warnings.joined(separator: "\n"))
+                "Preview build: audio-only composition",
+                "videoClips=\(videoClipCount)",
+                "audioSegments=\(audioSegments.count) lanes=\(lanes.count)",
+                String(format: "duration=%.2fs fps=%.0f", totalDuration, project.meta.fps),
+                "compositionAudioTracks=\(composition.tracks(withMediaType: .audio).count)",
+                (collected.warnings + audioCollected.warnings).isEmpty ? nil : ("warnings:\n" + (collected.warnings + audioCollected.warnings).joined(separator: "\n"))
             ].compactMap { $0 }).joined(separator: "\n")
-            return PlayerItemBuildResult(item: AVPlayerItem(asset: composition), debug: debug)
+
+            return PlayerItemBuildResult(item: item, debug: debug)
         }
+
+        let hasAudioAdjustments = project.timeline.tracks.contains { $0.isMuted || $0.isSolo }
+            || project.timeline.tracks.flatMap { $0.clips }.contains { abs($0.volume - 1.0) > 1e-9 }
 
         // Fast path (debug & correctness baseline):
         // If timeline is a single clip starting at 0 with no speed/trim offsets, play the original asset directly.
         // NOTE: for export, we disable this so trims/timeRange are always reflected by the composition.
-        if allowDirectAsset, videoSegments.count == 1, let seg = videoSegments.first {
+        if allowDirectAsset, !hasAudioAdjustments, videoSegments.count == 1, let seg = videoSegments.first {
             let isSimple = abs(seg.start - 0) < 1e-9
                 && abs(seg.sourceIn - 0) < 1e-9
                 && abs(seg.displayDuration - seg.sourceDuration) < 1e-6
@@ -428,14 +521,27 @@ final class PreviewPlayerController {
         let audioCompTrack: AVMutableCompositionTrack? =
             (lanes.count == 1) ? composition.addMutableTrack(withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) : nil
 
+        let anySolo = project.timeline.tracks.contains { $0.isSolo }
+        let clipVolumeById: [UUID: Double] = Dictionary(uniqueKeysWithValues: project.timeline.tracks.flatMap { $0.clips }.map { ($0.id, $0.volume) })
+
+        let trackAudibleFactorById: [UUID: Double] = Dictionary(uniqueKeysWithValues: project.timeline.tracks.map { track in
+            let audible = (!track.isMuted) && (!anySolo || track.isSolo)
+            return (track.id, audible ? 1.0 : 0.0)
+        })
+
+        var audioParams: AVMutableAudioMixInputParameters? = nil
+        if let audioCompTrack {
+            audioParams = AVMutableAudioMixInputParameters(track: audioCompTrack)
+        }
+
         // Insert segments.
         for (laneIndex, lane) in lanes.enumerated() {
             let compTrack = compTracks[laneIndex]
             for seg in lane {
-                let insertionTime = CMTime(seconds: seg.start, preferredTimescale: 600)
+                let insertionTime = CMTime(seconds: seg.start, preferredTimescale: timeScale)
                 let sourceRange = CMTimeRange(
-                    start: CMTime(seconds: seg.sourceIn, preferredTimescale: 600),
-                    duration: CMTime(seconds: seg.sourceDuration, preferredTimescale: 600)
+                    start: CMTime(seconds: seg.sourceIn, preferredTimescale: timeScale),
+                    duration: CMTime(seconds: seg.sourceDuration, preferredTimescale: timeScale)
                 )
 
                 do {
@@ -443,7 +549,7 @@ final class PreviewPlayerController {
 
                     // Speed: scale inserted time range to displayDuration.
                     let insertedRange = CMTimeRange(start: insertionTime, duration: sourceRange.duration)
-                    let targetDuration = CMTime(seconds: seg.displayDuration, preferredTimescale: 600)
+                    let targetDuration = CMTime(seconds: seg.displayDuration, preferredTimescale: timeScale)
                     if targetDuration != sourceRange.duration {
                         compTrack.scaleTimeRange(insertedRange, toDuration: targetDuration)
                     }
@@ -455,6 +561,14 @@ final class PreviewPlayerController {
                             if targetDuration != sourceRange.duration {
                                 audioCompTrack.scaleTimeRange(insertedRange, toDuration: targetDuration)
                             }
+
+                            // Apply per-clip volume + track mute/solo via audio mix.
+                            let clipVol = max(0, clipVolumeById[seg.clipId] ?? 1.0)
+                            let trackId = project.timeline.tracks.indices.contains(seg.trackIndex) ? project.timeline.tracks[seg.trackIndex].id : nil
+                            let trackFactor = (trackId.flatMap { trackAudibleFactorById[$0] }) ?? 1.0
+                            let effective = Float(max(0, min(2.0, clipVol * trackFactor)))
+                            let displayRange = CMTimeRange(start: insertionTime, duration: targetDuration)
+                            audioParams?.setVolumeRamp(fromStartVolume: effective, toEndVolume: effective, timeRange: displayRange)
                         }
                     }
                 } catch {
@@ -474,9 +588,15 @@ final class PreviewPlayerController {
 
             let item = AVPlayerItem(asset: composition)
 
+            if let audioParams {
+                let audioMix = AVMutableAudioMix()
+                audioMix.inputParameters = [audioParams]
+                item.audioMix = audioMix
+            }
+
             // Let AVFoundation generate sane instructions (keeps playback "ready" and fixes blank video on some assets).
             let systemVC = AVMutableVideoComposition(propertiesOf: composition)
-            systemVC.frameDuration = CMTime(seconds: 1.0 / max(1, project.meta.fps), preferredTimescale: 600)
+            systemVC.frameDuration = CMTime(seconds: 1.0 / max(1, project.meta.fps), preferredTimescale: timeScale)
             // Prefer using our computed render size (absolute after transform) for stability.
             systemVC.renderSize = renderSize
             item.videoComposition = systemVC
@@ -498,23 +618,30 @@ final class PreviewPlayerController {
         // Build a video composition that selects the topmost visible segment per time slice.
         let videoComposition = AVMutableVideoComposition()
         videoComposition.renderSize = renderSize
-        videoComposition.frameDuration = CMTime(seconds: 1.0 / max(1, project.meta.fps), preferredTimescale: 600)
+        videoComposition.frameDuration = CMTime(seconds: 1.0 / max(1, project.meta.fps), preferredTimescale: timeScale)
 
-        let boundaries = collectBoundaries(videoSegments)
-        let instructions: [AVMutableVideoCompositionInstruction] = zip(boundaries, boundaries.dropFirst()).compactMap { a, b in
-            let start = a
-            let end = b
-            if end <= start { return nil }
+        // IMPORTANT: build instruction boundaries in CMTime and derive timeRanges from those CMTime values.
+        // Converting (Double start/end) -> CMTime separately can introduce tiny rounding gaps that show as flashes at cuts.
+        let boundarySeconds = collectBoundaries(videoSegments)
+        let rawTimes = boundarySeconds
+            .map { CMTime(seconds: $0, preferredTimescale: timeScale) }
+            .sorted(by: { $0 < $1 })
+        var times: [CMTime] = []
+        times.reserveCapacity(rawTimes.count)
+        for t in rawTimes {
+            if let last = times.last, last == t { continue }
+            times.append(t)
+        }
 
-            let mid = (start + end) / 2
-            let top = topmostSegment(at: mid, segments: videoSegments)
+        let instructions: [AVMutableVideoCompositionInstruction] = zip(times, times.dropFirst()).compactMap { a, b in
+            if b <= a { return nil }
+
+            let midSeconds = (a.seconds + b.seconds) / 2
+            let top = topmostSegment(at: midSeconds, segments: videoSegments)
 
             let instruction = AVMutableVideoCompositionInstruction()
-            let startTime = CMTime(seconds: start, preferredTimescale: 600)
-            instruction.timeRange = CMTimeRange(
-                start: startTime,
-                duration: CMTime(seconds: end - start, preferredTimescale: 600)
-            )
+            let startTime = a
+            instruction.timeRange = CMTimeRangeFromTimeToTime(start: a, end: b)
 
             instruction.backgroundColor = CGColor(gray: 0, alpha: 1)
 
@@ -613,6 +740,72 @@ final class PreviewPlayerController {
         var warnings: [String]
     }
 
+    private struct AudioSegment {
+        let clipId: UUID
+        let timelineTrackId: UUID
+        let asset: AVAsset
+        let assetAudioTrack: AVAssetTrack
+        let start: Double
+        let end: Double
+        let sourceIn: Double
+        let sourceDuration: Double
+        let displayDuration: Double
+    }
+
+    private struct CollectedAudioSegments {
+        var segments: [AudioSegment]
+        var warnings: [String]
+    }
+
+    private static func collectAudioSegments(_ project: Project) async -> CollectedAudioSegments {
+        var segments: [AudioSegment] = []
+        var warnings: [String] = []
+
+        for track in project.timeline.tracks where track.kind == .audio {
+            for clip in track.clips {
+                guard let assetRecord = project.mediaAssets.first(where: { $0.id == clip.assetId }) else { continue }
+                let url = URL(fileURLWithPath: assetRecord.originalPath)
+                let asset = AVURLAsset(url: url)
+
+                do {
+                    let tracks = try await asset.loadTracks(withMediaType: .audio)
+                    guard let audioTrack = tracks.first else {
+                        warnings.append("No audio track: \(url.lastPathComponent)")
+                        continue
+                    }
+
+                    let start = max(0, clip.timelineStartSeconds)
+                    let displayDuration = max(0.05, clip.durationSeconds)
+
+                    // Match video interpretation: displayDuration seconds on timeline consumes displayDuration * speed from source.
+                    let speed = clip.speed
+                    let sourceDuration = max(0.05, displayDuration * max(0.0001, speed))
+                    let sourceIn = max(0, clip.sourceInSeconds)
+                    let end = start + displayDuration
+
+                    segments.append(
+                        AudioSegment(
+                            clipId: clip.id,
+                            timelineTrackId: track.id,
+                            asset: asset,
+                            assetAudioTrack: audioTrack,
+                            start: start,
+                            end: end,
+                            sourceIn: sourceIn,
+                            sourceDuration: sourceDuration,
+                            displayDuration: displayDuration
+                        )
+                    )
+                } catch {
+                    warnings.append("Load audio tracks failed: \(url.lastPathComponent) \(error.localizedDescription)")
+                    continue
+                }
+            }
+        }
+
+        return CollectedAudioSegments(segments: segments, warnings: warnings)
+    }
+
     private static func collectVideoSegments(_ project: Project) async -> CollectedSegments {
         var segments: [Segment] = []
         var warnings: [String] = []
@@ -620,6 +813,9 @@ final class PreviewPlayerController {
         // Track order defines z-order: later tracks are on top.
         for (trackIndex, track) in project.timeline.tracks.enumerated() where track.kind == .video {
             let zBase = trackIndex * 1_000_000
+
+            // Align adjacent boundaries within a small epsilon to reduce gaps/overlaps from floating-point math.
+            var previousEndSeconds: Double? = nil
 
             for (clipIndex, clip) in track.clips.enumerated() {
                 guard let assetRecord = project.mediaAssets.first(where: { $0.id == clip.assetId }) else { continue }
@@ -636,7 +832,10 @@ final class PreviewPlayerController {
                     let naturalSize = (try? await videoTrack.load(.naturalSize)) ?? CGSize(width: 1280, height: 720)
                     let preferredTransform = (try? await videoTrack.load(.preferredTransform)) ?? .identity
 
-                    let start = max(0, clip.timelineStartSeconds)
+                    var start = max(0, clip.timelineStartSeconds)
+                    if let prev = previousEndSeconds, abs(start - prev) < 1e-6 {
+                        start = prev
+                    }
                     let displayDuration = max(0.05, clip.durationSeconds)
 
                 // Interpret speed: timeline displays displayDuration seconds; source range consumes displayDuration * speed.
@@ -645,6 +844,7 @@ final class PreviewPlayerController {
 
                 let sourceIn = max(0, clip.sourceInSeconds)
                 let end = start + displayDuration
+                previousEndSeconds = end
 
                     segments.append(
                         Segment(

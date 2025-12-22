@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="140" y1="120" x2="920" y2="940" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#34D399"/>
+      <stop offset="0.55" stop-color="#0EA5E9"/>
+      <stop offset="1" stop-color="#0B3B6A"/>
+    </linearGradient>
+    <linearGradient id="rise" x1="520" y1="360" x2="520" y2="720" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E6FAFF"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="72" y="72" width="880" height="880" rx="196" fill="url(#bg)"/>
+
+  <path d="M206 188c82-66 187-104 301-104 100 0 193 29 268 79 20 14 24 42 10 61-14 20-42 24-61 10-61-40-136-63-217-63-92 0-176 29-241 81-19 15-47 12-62-7-15-19-12-47 7-62Z" fill="#FFFFFF" opacity="0.14"/>
+
+  <path d="M708 616c70 0 128-50 128-114 0-56-44-103-104-112-12-88-92-156-190-156-82 0-154 47-182 116-5-1-11-1-16-1-79 0-144 56-144 126 0 71 65 141 176 141h332Z" fill="#FFFFFF" opacity="0.93"/>
+
+  <path d="M520 708c-18 0-32-14-32-32V492l-44 44c-12 12-33 12-45 0-13-13-13-33 0-46l99-99c6-6 14-10 23-10s17 4 23 10l99 99c13 13 13 33 0 46-12 12-33 12-45 0l-46-46v186c0 18-14 32-32 32Z" fill="url(#rise)"/>
+
+  <path d="M340 754c0-14 11-26 26-26h316c14 0 26 12 26 26 0 15-12 26-26 26H366c-15 0-26-11-26-26Z" fill="#FFFFFF" opacity="0.28"/>
+</svg>

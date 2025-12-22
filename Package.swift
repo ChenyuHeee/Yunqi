@@ -3,6 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "Yunqi",
+    defaultLocalization: "en",
     platforms: [
         .macOS(.v13)
     ],
@@ -34,7 +35,10 @@ let package = Package(
                 "Storage",
                 "UIBridge"
             ],
-            path: "Sources/YunqiMacApp"
+            path: "Sources/YunqiMacApp",
+            resources: [
+                .process("Resources")
+            ]
         ),
         .target(
             name: "EditorCore",

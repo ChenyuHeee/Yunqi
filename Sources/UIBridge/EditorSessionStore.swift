@@ -59,6 +59,10 @@ public final class EditorSessionStore: ObservableObject {
         await session.importAsset(path: path, id: id)
     }
 
+    public func renameAsset(assetId: UUID, displayName: String) async throws {
+        try await session.renameAsset(assetId: assetId, displayName: displayName)
+    }
+
     public func addTrack(kind: TrackKind) async {
         await session.addTrack(kind: kind)
     }
@@ -121,6 +125,22 @@ public final class EditorSessionStore: ObservableObject {
 
     public func splitClip(clipId: UUID, at timeSeconds: Double) async throws {
         try await session.splitClip(clipId: clipId, at: timeSeconds)
+    }
+
+    public func splitClips(clipIds: [UUID], at timeSeconds: Double) async {
+        await session.splitClips(clipIds: clipIds, at: timeSeconds)
+    }
+
+    public func setClipVolume(clipId: UUID, volume: Double) async throws {
+        try await session.setClipVolume(clipId: clipId, volume: volume)
+    }
+
+    public func toggleTrackMute(trackId: UUID) async throws {
+        try await session.toggleTrackMute(trackId: trackId)
+    }
+
+    public func toggleTrackSolo(trackId: UUID) async throws {
+        try await session.toggleTrackSolo(trackId: trackId)
     }
 
     public func undo() async {

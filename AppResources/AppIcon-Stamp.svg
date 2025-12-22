@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(380 320) rotate(45) scale(920 920)">
+      <stop offset="0" stop-color="#FFEDD5"/>
+      <stop offset="0.42" stop-color="#FCA5A5"/>
+      <stop offset="0.78" stop-color="#818CF8"/>
+      <stop offset="1" stop-color="#0EA5E9"/>
+    </radialGradient>
+    <filter id="shadow" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="18" result="b"/>
+      <feColorMatrix in="b" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 0.25 0" result="s"/>
+      <feOffset dy="10"/>
+      <feMerge>
+        <feMergeNode in="s"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect x="72" y="72" width="880" height="880" rx="196" fill="url(#bg)"/>
+
+  <!-- White stamp plate -->
+  <g filter="url(#shadow)">
+    <rect x="188" y="240" width="648" height="544" rx="120" fill="#FFFFFF" opacity="0.92"/>
+  </g>
+
+  <!-- Center mark: a stylized Y-like blade/playhead -->
+  <path d="M512 328c18 0 32 14 32 32v160l92-92c12-12 32-12 44 0 12 12 12 32 0 44L556 596c-6 6-14 10-24 10s-18-4-24-10L344 472c-12-12-12-32 0-44 12-12 32-12 44 0l92 92V360c0-18 14-32 32-32Z" fill="#0F172A" opacity="0.88"/>
+
+  <!-- Timeline dots -->
+  <g opacity="0.26" fill="#0F172A">
+    <circle cx="332" cy="676" r="16"/>
+    <circle cx="412" cy="676" r="16"/>
+    <circle cx="492" cy="676" r="16"/>
+    <circle cx="572" cy="676" r="16"/>
+    <circle cx="652" cy="676" r="16"/>
+    <circle cx="732" cy="676" r="16"/>
+  </g>
+</svg>
