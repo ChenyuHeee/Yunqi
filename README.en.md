@@ -19,7 +19,7 @@
 <p align="center">
 	<a href="README.md"><img alt="Chinese" src="https://img.shields.io/badge/中文-README-181717?style=for-the-badge&logo=readme" /></a>
 	<a href="CHANGELOG.md"><img alt="Changelog" src="https://img.shields.io/badge/Changelog-CHANGELOG-181717?style=for-the-badge&logo=github" /></a>
-	<a href="https://github.com/ChenyuHeee/Yunqi/releases"><img alt="Downloads" src="https://img.shields.io/badge/Download-Releases-181717?style=for-the-badge&logo=github" /></a>
+	<a href="https://github.com/ChenyuHeee/Yunqi/releases/latest"><img alt="Downloads" src="https://img.shields.io/badge/Download-Latest%20Release-181717?style=for-the-badge&logo=github" /></a>
 </p>
 
 ---

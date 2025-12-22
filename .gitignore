@@ -45,3 +45,11 @@ DerivedData/
 
 # Logs
 *.log
+
+# Release artifacts
+dist/
+
+# Local tooling temp
+.build/_zipinspect/
+.build/appicon-tmp/
+.build/AppIcon.iconset/
