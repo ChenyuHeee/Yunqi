@@ -43,6 +43,8 @@
 - 基础 EQ（可后置）
 - 混音参数进入 `AudioGraph`，与视频同一评估器驱动
 
+另见：`docs/audio-roadmap.md`（音频系统长期规划：Apple Silicon 优先，对标/超越 Final Cut Pro）。
+
 ### 1.6 导出与交付（Export / Delivery）
 - 预设：H.264/H.265/ProRes（逐步），分辨率/码率/帧率
 - 队列：落盘恢复、取消、重试、历史裁剪、错误可诊断
