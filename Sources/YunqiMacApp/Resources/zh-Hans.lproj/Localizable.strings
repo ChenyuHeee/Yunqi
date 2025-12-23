@@ -61,6 +61,12 @@
 "menu.delete" = "删除";
 "menu.deleteN" = "删除 %d 个片段";
 
+"menu.clip.spatialConform" = "空间适配";
+"menu.clip.spatialConform.followProject" = "跟随项目";
+"menu.clip.spatialConform.fit" = "适配";
+"menu.clip.spatialConform.fill" = "填充";
+"menu.clip.spatialConform.none" = "无缩放";
+
 /* Toolbar / main UI */
 "ui.toolbar.play" = "播放";
 "ui.toolbar.pause" = "暂停";
@@ -78,8 +84,21 @@
 "ui.sidebar.noTracks" = "没有轨道";
 "ui.sidebar.clipsCount" = "片段：%d";
 
+"ui.sidebar.spatialConform" = "空间适配";
+"ui.sidebar.spatialConform.projectDefault" = "项目默认";
+"ui.sidebar.spatialConform.clipOverride" = "片段覆盖";
+"ui.sidebar.spatialConform.followProject" = "跟随项目";
+"ui.sidebar.spatialConform.fit" = "适配";
+"ui.sidebar.spatialConform.fill" = "填充";
+"ui.sidebar.spatialConform.none" = "无缩放";
+
 "ui.preferences.newProjectOpenTarget" = "新建项目打开方式";
 "ui.preferences.openProjectOpenTarget" = "打开项目方式";
+
+"ui.preferences.canvasBackground" = "预览器—画布背景";
+"ui.canvasBackground.black" = "黑色";
+"ui.canvasBackground.darkGray" = "深灰";
+"ui.canvasBackground.window" = "窗口背景色";
 "ui.openTarget.currentTab" = "当前标签";
 "ui.openTarget.newTab" = "新标签";
 "ui.openTarget.newWindow" = "新窗口（新页面）";
@@ -97,3 +116,16 @@
 "status.exporting" = "正在导出…";
 "status.exported" = "已导出：%@";
 "status.exportFailed" = "导出失败：%@";
+"status.exportCancelled" = "已取消导出";
+
+/* Export dialog */
+"ui.exportDialog.title" = "导出";
+"ui.exportDialog.destination" = "位置";
+"ui.exportDialog.destinationNotSet" = "未选择";
+"ui.exportDialog.choose" = "选择…";
+"ui.exportDialog.preset" = "预设";
+"ui.exportDialog.presetHighestQuality" = "最高质量";
+"ui.exportDialog.format" = "格式";
+"ui.exportDialog.start" = "开始导出";
+"ui.exportDialog.cancel" = "取消导出";
+"ui.exportDialog.close" = "关闭";

@@ -1,15 +1,132 @@
+import CoreGraphics
 import Foundation
-import RenderEngine
+
+public struct RenderSize: Codable, Sendable, Hashable {
+    public var width: Int
+    public var height: Int
+
+    public init(width: Int, height: Int) {
+        self.width = max(1, width)
+        self.height = max(1, height)
+    }
+}
+
+public enum ProjectFormatPolicy: String, Codable, Sendable {
+    /// Follow the first clip / media defaults (Final Cut Pro-like “Automatic Settings”).
+    case automatic
+    /// User-locked project format.
+    case custom
+}
+
+public enum SpatialConform: String, Codable, Sendable {
+    /// Fit the entire source inside the project canvas (letterbox/pillarbox).
+    case fit
+    /// Fill the project canvas (crop as needed).
+    case fill
+    /// No scaling; place source at 1:1 and center (may crop).
+    case none
+}
+
+/// Compute a transform that places a source video track into a project canvas.
+///
+/// This is intentionally AVFoundation-agnostic so preview/export can share logic.
+public func spatialConformTransform(
+    naturalSize: CGSize,
+    preferredTransform: CGAffineTransform,
+    renderSize: CGSize,
+    mode: SpatialConform
+) -> CGAffineTransform {
+    guard naturalSize.width.isFinite, naturalSize.height.isFinite, naturalSize.width > 0, naturalSize.height > 0 else {
+        return preferredTransform
+    }
+    guard renderSize.width.isFinite, renderSize.height.isFinite, renderSize.width > 0, renderSize.height > 0 else {
+        return preferredTransform
+    }
+
+    // Normalize preferredTransform so the transformed rect starts at (0,0).
+    let srcRect = CGRect(origin: .zero, size: naturalSize)
+    let transformedRect = srcRect.applying(preferredTransform)
+    let normalized = preferredTransform.translatedBy(x: -transformedRect.origin.x, y: -transformedRect.origin.y)
+
+    let displayW = abs(transformedRect.size.width)
+    let displayH = abs(transformedRect.size.height)
+    guard displayW > 0.01, displayH > 0.01 else {
+        return preferredTransform
+    }
+
+    let scale: CGFloat = {
+        switch mode {
+        case .none:
+            return 1.0
+        case .fit:
+            return min(renderSize.width / displayW, renderSize.height / displayH)
+        case .fill:
+            return max(renderSize.width / displayW, renderSize.height / displayH)
+        }
+    }()
+
+    let scaledW = displayW * scale
+    let scaledH = displayH * scale
+    let tx = (renderSize.width - scaledW) / 2.0
+    let ty = (renderSize.height - scaledH) / 2.0
+
+    // Apply in a stable order: normalize -> scale -> translate-to-center.
+    // (In CoreGraphics, `t1.concatenating(t2)` applies `t1` first, then `t2`.)
+    let scaled = normalized.concatenating(CGAffineTransform(scaleX: scale, y: scale))
+    return scaled.concatenating(CGAffineTransform(translationX: tx, y: ty))
+}
 
 public struct ProjectMeta: Codable, Sendable {
     public var name: String
     public var createdAt: Date
     public var fps: Double
+    public var formatPolicy: ProjectFormatPolicy
+    public var renderSize: RenderSize
+    public var spatialConformDefault: SpatialConform
 
-    public init(name: String, createdAt: Date = Date(), fps: Double = 30.0) {
+    public init(
+        name: String,
+        createdAt: Date = Date(),
+        fps: Double = 30.0,
+        formatPolicy: ProjectFormatPolicy = .automatic,
+        renderSize: RenderSize = RenderSize(width: 1920, height: 1080),
+        spatialConformDefault: SpatialConform = .fit
+    ) {
         self.name = name
         self.createdAt = createdAt
         self.fps = fps
+        self.formatPolicy = formatPolicy
+        self.renderSize = renderSize
+        self.spatialConformDefault = spatialConformDefault
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case createdAt
+        case fps
+        case formatPolicy
+        case renderSize
+        case spatialConformDefault
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        name = try c.decode(String.self, forKey: .name)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        fps = try c.decode(Double.self, forKey: .fps)
+        formatPolicy = try c.decodeIfPresent(ProjectFormatPolicy.self, forKey: .formatPolicy) ?? .automatic
+        renderSize = try c.decodeIfPresent(RenderSize.self, forKey: .renderSize) ?? RenderSize(width: 1920, height: 1080)
+        spatialConformDefault = try c.decodeIfPresent(SpatialConform.self, forKey: .spatialConformDefault) ?? .fit
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(name, forKey: .name)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(fps, forKey: .fps)
+        try c.encode(formatPolicy, forKey: .formatPolicy)
+        try c.encode(renderSize, forKey: .renderSize)
+        try c.encode(spatialConformDefault, forKey: .spatialConformDefault)
     }
 }
 
@@ -144,85 +261,6 @@ public enum ProjectEditError: Error, CustomStringConvertible, Sendable {
     }
 }
 
-// MARK: - Playback (Scheduler Skeleton)
-
-public enum PlaybackState: Sendable {
-    case stopped
-    case playing
-    case paused
-}
-
-public actor PlaybackController {
-    public typealias ProjectSnapshotProvider = @Sendable () async -> Project
-    public typealias FrameHandler = @Sendable (RenderedFrame) -> Void
-
-    private let projectSnapshot: ProjectSnapshotProvider
-    private let engine: any RenderEngine
-    private let onFrame: FrameHandler?
-
-    private var state: PlaybackState = .stopped
-    private var currentTimeSeconds: Double = 0
-    private var playbackTask: Task<Void, Never>?
-
-    public init(
-        projectSnapshot: @escaping ProjectSnapshotProvider,
-        engine: any RenderEngine,
-        onFrame: FrameHandler? = nil
-    ) {
-        self.projectSnapshot = projectSnapshot
-        self.engine = engine
-        self.onFrame = onFrame
-    }
-
-    public func getState() -> PlaybackState { state }
-    public func getCurrentTimeSeconds() -> Double { currentTimeSeconds }
-
-    public func prepare() throws {
-        try engine.prepare()
-    }
-
-    public func seek(to timeSeconds: Double) {
-        currentTimeSeconds = max(0, timeSeconds)
-    }
-
-    public func play(fps: Double? = nil) {
-        guard state != .playing else { return }
-        state = .playing
-
-        playbackTask?.cancel()
-        playbackTask = Task {
-            let snapshot = await projectSnapshot()
-            let timelineFPS = max(1, snapshot.meta.fps)
-            let effectiveFPS = max(1, fps ?? timelineFPS)
-            let dt = 1.0 / effectiveFPS
-
-            while !Task.isCancelled {
-                let frame = (try? engine.renderFrame(RenderRequest(timeSeconds: currentTimeSeconds, quality: .realtime)))
-                if let frame {
-                    onFrame?(frame)
-                }
-                currentTimeSeconds += dt
-                let nanos = UInt64(dt * 1_000_000_000)
-                try? await Task.sleep(nanoseconds: nanos)
-            }
-        }
-    }
-
-    public func pause() {
-        guard state == .playing else { return }
-        state = .paused
-        playbackTask?.cancel()
-        playbackTask = nil
-    }
-
-    public func stop() {
-        state = .stopped
-        playbackTask?.cancel()
-        playbackTask = nil
-        currentTimeSeconds = 0
-    }
-}
-
 // MARK: - ProjectEditor (Core API)
 
 public final class ProjectEditor {
@@ -280,13 +318,60 @@ public final class ProjectEditor {
         execute(AddTrackCommand(kind: kind))
     }
 
+    public func setProjectFormatPolicy(_ policy: ProjectFormatPolicy) {
+        let old = project.meta.formatPolicy
+        guard old != policy else { return }
+        execute(SetProjectFormatPolicyCommand(oldPolicy: old, newPolicy: policy))
+    }
+
+    public func setProjectRenderSize(_ size: RenderSize) {
+        let normalized = RenderSize(width: size.width, height: size.height)
+        let old = project.meta.renderSize
+        guard old != normalized else { return }
+        execute(SetProjectRenderSizeCommand(oldSize: old, newSize: normalized))
+    }
+
+    public func setProjectSpatialConformDefault(_ mode: SpatialConform) {
+        let old = project.meta.spatialConformDefault
+        guard old != mode else { return }
+        execute(SetProjectSpatialConformDefaultCommand(oldMode: old, newMode: mode))
+    }
+
+    public func setClipSpatialConformOverride(clipId: UUID, override mode: SpatialConform?) throws {
+        try setClipsSpatialConformOverride(clipIds: [clipId], override: mode)
+    }
+
+    public func setClipsSpatialConformOverride(clipIds: [UUID], override mode: SpatialConform?) throws {
+        let uniqueIds = Array(Set(clipIds))
+        guard !uniqueIds.isEmpty else { return }
+
+        // Validate at least one clip exists (and all provided ids are valid).
+        for id in uniqueIds {
+            _ = try locateClipIndexed(clipId: id)
+        }
+
+        var oldOverrides: [UUID: SpatialConform?] = [:]
+        for id in uniqueIds {
+            let located = try locateClipIndexed(clipId: id)
+            oldOverrides[id] = located.clip.spatialConformOverride
+        }
+
+        // No-op if all target clips already have the same override value.
+        let allSame = uniqueIds.allSatisfy { oldOverrides[$0] ?? nil == mode }
+        guard !allSame else { return }
+
+        execute(SetClipsSpatialConformOverrideCommand(clipIds: uniqueIds, oldOverrides: oldOverrides, newOverride: mode))
+    }
+
     public func addClip(
         trackIndex: Int,
         assetId: UUID,
         timelineStartSeconds: Double,
         sourceInSeconds: Double,
         durationSeconds: Double,
-        speed: Double = 1.0
+        speed: Double = 1.0,
+        autoLockProjectRenderSize: RenderSize? = nil,
+        autoLockProjectFPS: Double? = nil
     ) throws {
         guard project.mediaAssets.contains(where: { $0.id == assetId }) else {
             throw ProjectEditError.missingAsset(assetId)
@@ -294,15 +379,49 @@ public final class ProjectEditor {
         guard project.timeline.tracks.indices.contains(trackIndex) else {
             throw ProjectEditError.invalidTrackIndex(trackIndex)
         }
-        let command = AddClipCommand(
-            trackIndex: trackIndex,
-            assetId: assetId,
-            timelineStartSeconds: timelineStartSeconds,
-            sourceInSeconds: sourceInSeconds,
-            durationSeconds: durationSeconds,
-            speed: speed
-        )
-        execute(command)
+
+        let shouldAutoLockFormat: Bool = {
+            guard let lock = autoLockProjectRenderSize else { return false }
+            guard lock.width > 0, lock.height > 0 else { return false }
+            guard project.meta.formatPolicy == .automatic else { return false }
+            // Only treat as “first valid video content” when the project has no video clips yet.
+            let hasAnyVideoClip = project.timeline.tracks
+                .filter { $0.kind == .video }
+                .flatMap { $0.clips }
+                .isEmpty == false
+            return !hasAnyVideoClip
+        }()
+
+        if shouldAutoLockFormat, let lock = autoLockProjectRenderSize {
+            let before = project
+            var after = project
+            after.meta.renderSize = RenderSize(width: lock.width, height: lock.height)
+            if let fps = autoLockProjectFPS, fps.isFinite, fps > 1 {
+                after.meta.fps = fps
+            }
+            after.meta.formatPolicy = .custom
+
+            let clip = Clip(
+                assetId: assetId,
+                timelineStartSeconds: timelineStartSeconds,
+                sourceInSeconds: sourceInSeconds,
+                durationSeconds: durationSeconds,
+                speed: speed
+            )
+            after.timeline.tracks[trackIndex].clips.append(clip)
+
+            execute(ProjectSnapshotCommand(name: "Add Clip", before: before, after: after))
+        } else {
+            let command = AddClipCommand(
+                trackIndex: trackIndex,
+                assetId: assetId,
+                timelineStartSeconds: timelineStartSeconds,
+                sourceInSeconds: sourceInSeconds,
+                durationSeconds: durationSeconds,
+                speed: speed
+            )
+            execute(command)
+        }
     }
 
     public func moveClip(clipId: UUID, toStartSeconds: Double) throws {
@@ -755,6 +874,90 @@ public final class ProjectEditor {
             throw ProjectEditError.missingTrack(trackId)
         }
         return idx
+    }
+}
+
+private struct SetProjectFormatPolicyCommand: EditorCommand {
+    let oldPolicy: ProjectFormatPolicy
+    let newPolicy: ProjectFormatPolicy
+
+    var name: String { "Set Project Format Policy" }
+
+    func apply(to project: inout Project) {
+        project.meta.formatPolicy = newPolicy
+    }
+
+    func revert(on project: inout Project) {
+        project.meta.formatPolicy = oldPolicy
+    }
+}
+
+private struct SetProjectRenderSizeCommand: EditorCommand {
+    let oldSize: RenderSize
+    let newSize: RenderSize
+
+    var name: String { "Set Project Render Size" }
+
+    func apply(to project: inout Project) {
+        project.meta.renderSize = newSize
+    }
+
+    func revert(on project: inout Project) {
+        project.meta.renderSize = oldSize
+    }
+}
+
+private struct SetProjectSpatialConformDefaultCommand: EditorCommand {
+    let oldMode: SpatialConform
+    let newMode: SpatialConform
+
+    var name: String { "Set Project Spatial Conform" }
+
+    func apply(to project: inout Project) {
+        project.meta.spatialConformDefault = newMode
+    }
+
+    func revert(on project: inout Project) {
+        project.meta.spatialConformDefault = oldMode
+    }
+}
+
+private struct SetClipsSpatialConformOverrideCommand: EditorCommand {
+    let clipIds: [UUID]
+    let oldOverrides: [UUID: SpatialConform?]
+    let newOverride: SpatialConform?
+
+    var name: String {
+        if newOverride == nil {
+            return "Clear Clip Spatial Conform Override"
+        }
+        return "Set Clip Spatial Conform Override"
+    }
+
+    func apply(to project: inout Project) {
+        applyOverride(newOverride, to: &project)
+    }
+
+    func revert(on project: inout Project) {
+        for id in clipIds {
+            let old = oldOverrides[id] ?? nil
+            applyOverride(old, clipId: id, to: &project)
+        }
+    }
+
+    private func applyOverride(_ value: SpatialConform?, to project: inout Project) {
+        for id in clipIds {
+            applyOverride(value, clipId: id, to: &project)
+        }
+    }
+
+    private func applyOverride(_ value: SpatialConform?, clipId: UUID, to project: inout Project) {
+        for tIndex in project.timeline.tracks.indices {
+            if let cIndex = project.timeline.tracks[tIndex].clips.firstIndex(where: { $0.id == clipId }) {
+                project.timeline.tracks[tIndex].clips[cIndex].spatialConformOverride = value
+                return
+            }
+        }
     }
 }
 
@@ -1261,6 +1464,9 @@ public struct Clip: Codable, Sendable {
     // Audio params (MVP)
     public var volume: Double
 
+    // Spatial conform (Final Cut-style)
+    public var spatialConformOverride: SpatialConform?
+
     public init(
         id: UUID = UUID(),
         assetId: UUID,
@@ -1268,7 +1474,8 @@ public struct Clip: Codable, Sendable {
         sourceInSeconds: Double,
         durationSeconds: Double,
         speed: Double = 1.0,
-        volume: Double = 1.0
+        volume: Double = 1.0,
+        spatialConformOverride: SpatialConform? = nil
     ) {
         self.id = id
         self.assetId = assetId
@@ -1277,6 +1484,7 @@ public struct Clip: Codable, Sendable {
         self.durationSeconds = durationSeconds
         self.speed = speed
         self.volume = volume
+        self.spatialConformOverride = spatialConformOverride
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1287,6 +1495,7 @@ public struct Clip: Codable, Sendable {
         case durationSeconds
         case speed
         case volume
+        case spatialConformOverride
     }
 
     public init(from decoder: any Decoder) throws {
@@ -1298,6 +1507,7 @@ public struct Clip: Codable, Sendable {
         durationSeconds = try c.decode(Double.self, forKey: .durationSeconds)
         speed = try c.decodeIfPresent(Double.self, forKey: .speed) ?? 1.0
         volume = try c.decodeIfPresent(Double.self, forKey: .volume) ?? 1.0
+        spatialConformOverride = try c.decodeIfPresent(SpatialConform.self, forKey: .spatialConformOverride)
     }
 }
 

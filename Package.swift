@@ -11,6 +11,7 @@ let package = Package(
         .executable(name: "YunqiApp", targets: ["YunqiApp"]),
         .executable(name: "YunqiMacApp", targets: ["YunqiMacApp"]),
         .library(name: "EditorCore", targets: ["EditorCore"]),
+        .library(name: "EditorEngine", targets: ["EditorEngine"]),
         .library(name: "MediaIO", targets: ["MediaIO"]),
         .library(name: "RenderEngine", targets: ["RenderEngine"]),
         .library(name: "Storage", targets: ["Storage"]),
@@ -31,6 +32,7 @@ let package = Package(
             name: "YunqiMacApp",
             dependencies: [
                 "EditorCore",
+                "EditorEngine",
                 "RenderEngine",
                 "Storage",
                 "UIBridge"
@@ -42,10 +44,16 @@ let package = Package(
         ),
         .target(
             name: "EditorCore",
+            dependencies: [],
+            path: "Sources/EditorCore"
+        ),
+        .target(
+            name: "EditorEngine",
             dependencies: [
+                "EditorCore",
                 "RenderEngine"
             ],
-            path: "Sources/EditorCore"
+            path: "Sources/EditorEngine"
         ),
         .target(
             name: "MediaIO",
@@ -68,6 +76,7 @@ let package = Package(
             name: "UIBridge",
             dependencies: [
                 "EditorCore",
+                "EditorEngine",
                 "RenderEngine"
             ],
             path: "Sources/UIBridge"
@@ -76,6 +85,15 @@ let package = Package(
             name: "EditorCoreTests",
             dependencies: ["EditorCore"],
             path: "Tests/EditorCoreTests"
+        ),
+        .testTarget(
+            name: "EditorEngineTests",
+            dependencies: [
+                "EditorCore",
+                "EditorEngine",
+                "RenderEngine"
+            ],
+            path: "Tests/EditorEngineTests"
         )
     ]
 )

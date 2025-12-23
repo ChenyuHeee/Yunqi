@@ -61,6 +61,12 @@
 "menu.delete" = "Delete";
 "menu.deleteN" = "Delete %d Clips";
 
+"menu.clip.spatialConform" = "Spatial Conform";
+"menu.clip.spatialConform.followProject" = "Follow Project";
+"menu.clip.spatialConform.fit" = "Fit";
+"menu.clip.spatialConform.fill" = "Fill";
+"menu.clip.spatialConform.none" = "None";
+
 /* Toolbar / main UI */
 "ui.toolbar.play" = "Play";
 "ui.toolbar.pause" = "Pause";
@@ -78,8 +84,21 @@
 "ui.sidebar.noTracks" = "No tracks";
 "ui.sidebar.clipsCount" = "clips: %d";
 
+"ui.sidebar.spatialConform" = "Spatial Conform";
+"ui.sidebar.spatialConform.projectDefault" = "Project Default";
+"ui.sidebar.spatialConform.clipOverride" = "Clip Override";
+"ui.sidebar.spatialConform.followProject" = "Follow Project";
+"ui.sidebar.spatialConform.fit" = "Fit";
+"ui.sidebar.spatialConform.fill" = "Fill";
+"ui.sidebar.spatialConform.none" = "None";
+
 "ui.preferences.newProjectOpenTarget" = "New Project — Open Target";
 "ui.preferences.openProjectOpenTarget" = "Open Project — Open Target";
+
+"ui.preferences.canvasBackground" = "Viewer — Canvas Background";
+"ui.canvasBackground.black" = "Black";
+"ui.canvasBackground.darkGray" = "Dark Gray";
+"ui.canvasBackground.window" = "Window Background";
 "ui.openTarget.currentTab" = "Current Tab";
 "ui.openTarget.newTab" = "New Tab";
 "ui.openTarget.newWindow" = "New Window";
@@ -97,3 +116,16 @@
 "status.exporting" = "Exporting…";
 "status.exported" = "Exported: %@";
 "status.exportFailed" = "Export failed: %@";
+"status.exportCancelled" = "Export cancelled";
+
+/* Export dialog */
+"ui.exportDialog.title" = "Export";
+"ui.exportDialog.destination" = "Destination";
+"ui.exportDialog.destinationNotSet" = "Not set";
+"ui.exportDialog.choose" = "Choose…";
+"ui.exportDialog.preset" = "Preset";
+"ui.exportDialog.presetHighestQuality" = "Highest Quality";
+"ui.exportDialog.format" = "Format";
+"ui.exportDialog.start" = "Start Export";
+"ui.exportDialog.cancel" = "Cancel Export";
+"ui.exportDialog.close" = "Close";

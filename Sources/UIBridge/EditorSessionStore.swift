@@ -1,6 +1,7 @@
 import Combine
 import CoreGraphics
 import EditorCore
+import EditorEngine
 import Foundation
 import RenderEngine
 
@@ -67,13 +68,35 @@ public final class EditorSessionStore: ObservableObject {
         await session.addTrack(kind: kind)
     }
 
+    public func setProjectFormatPolicy(_ policy: ProjectFormatPolicy) async {
+        await session.setProjectFormatPolicy(policy)
+    }
+
+    public func setProjectRenderSize(_ size: RenderSize) async {
+        await session.setProjectRenderSize(size)
+    }
+
+    public func setProjectSpatialConformDefault(_ mode: SpatialConform) async {
+        await session.setProjectSpatialConformDefault(mode)
+    }
+
+    public func setClipSpatialConformOverride(clipId: UUID, override mode: SpatialConform?) async throws {
+        try await session.setClipSpatialConformOverride(clipId: clipId, override: mode)
+    }
+
+    public func setClipsSpatialConformOverride(clipIds: [UUID], override mode: SpatialConform?) async throws {
+        try await session.setClipsSpatialConformOverride(clipIds: clipIds, override: mode)
+    }
+
     public func addClip(
         trackIndex: Int,
         assetId: UUID,
         timelineStartSeconds: Double,
         sourceInSeconds: Double,
         durationSeconds: Double,
-        speed: Double = 1.0
+        speed: Double = 1.0,
+        autoLockProjectRenderSize: RenderSize? = nil,
+        autoLockProjectFPS: Double? = nil
     ) async throws {
         try await session.addClip(
             trackIndex: trackIndex,
@@ -81,7 +104,9 @@ public final class EditorSessionStore: ObservableObject {
             timelineStartSeconds: timelineStartSeconds,
             sourceInSeconds: sourceInSeconds,
             durationSeconds: durationSeconds,
-            speed: speed
+            speed: speed,
+            autoLockProjectRenderSize: autoLockProjectRenderSize,
+            autoLockProjectFPS: autoLockProjectFPS
         )
     }
 

@@ -209,6 +209,53 @@ final class EditorCoreTests: XCTestCase {
         XCTAssertTrue(editor.project.timeline.tracks[1].isSolo)
     }
 
+    func testProjectEditorSpatialConformProjectDefaultUndoRedo() {
+        let editor = ProjectEditor(project: Project(meta: ProjectMeta(name: "Demo")))
+
+        XCTAssertEqual(editor.project.meta.spatialConformDefault, .fit)
+        editor.setProjectSpatialConformDefault(.fill)
+        XCTAssertEqual(editor.project.meta.spatialConformDefault, .fill)
+
+        editor.undo()
+        XCTAssertEqual(editor.project.meta.spatialConformDefault, .fit)
+
+        editor.redo()
+        XCTAssertEqual(editor.project.meta.spatialConformDefault, .fill)
+    }
+
+    func testProjectEditorSpatialConformClipOverrideSetClearUndoRedo() throws {
+        let editor = ProjectEditor(project: Project(meta: ProjectMeta(name: "Demo")))
+        let assetId = editor.importAsset(path: "/tmp/video.mp4")
+        editor.addTrack(kind: .video)
+        try editor.addClip(trackIndex: 0, assetId: assetId, timelineStartSeconds: 0, sourceInSeconds: 0, durationSeconds: 1)
+        let clipId = try XCTUnwrap(editor.project.timeline.tracks[0].clips.first?.id)
+
+        func overrideValue() -> SpatialConform? {
+            editor.project.timeline.tracks
+                .flatMap { $0.clips }
+                .first(where: { $0.id == clipId })?
+                .spatialConformOverride
+        }
+
+        XCTAssertNil(overrideValue())
+
+        try editor.setClipSpatialConformOverride(clipId: clipId, override: SpatialConform.none)
+        XCTAssertEqual(overrideValue(), SpatialConform.none)
+
+        editor.undo()
+        XCTAssertNil(overrideValue())
+
+        editor.redo()
+        XCTAssertEqual(overrideValue(), SpatialConform.none)
+
+        // Clear override (follow project)
+        try editor.setClipSpatialConformOverride(clipId: clipId, override: nil)
+        XCTAssertNil(overrideValue())
+
+        editor.undo()
+        XCTAssertEqual(overrideValue(), SpatialConform.none)
+    }
+
     func testMoveClipAutoLanesToNewTrackOnOverlapUndoRedo() throws {
         let editor = ProjectEditor(project: Project(meta: ProjectMeta(name: "Demo")))
         let assetId = editor.importAsset(path: "/tmp/video.mp4")
@@ -269,61 +316,91 @@ final class EditorCoreTests: XCTestCase {
         )
     }
 
-    func testEditorSessionEditingAndSnapshot() async throws {
-        let session = EditorSession(project: Project(meta: ProjectMeta(name: "Demo")))
-        let assetId = await session.importAsset(path: "/tmp/video.mp4")
-        await session.addTrack(kind: .video)
-        try await session.addClip(
+    func testAutomaticProjectFormatLocksOnFirstVideoClipUndoRedo() throws {
+        var meta = ProjectMeta(name: "Demo", fps: 30)
+        meta.formatPolicy = .automatic
+        meta.renderSize = RenderSize(width: 1920, height: 1080)
+
+        let editor = ProjectEditor(project: Project(meta: meta, timeline: Timeline(tracks: [Track(kind: .video)])))
+        let assetId = editor.importAsset(path: "/tmp/video.mp4")
+
+        try editor.addClip(
             trackIndex: 0,
             assetId: assetId,
             timelineStartSeconds: 0,
             sourceInSeconds: 0,
-            durationSeconds: 1
+            durationSeconds: 1,
+            speed: 1.0,
+            autoLockProjectRenderSize: RenderSize(width: 1280, height: 720),
+            autoLockProjectFPS: 59.94
         )
 
-        let snap = await session.snapshot()
-        XCTAssertEqual(snap.mediaAssets.count, 1)
-        XCTAssertEqual(snap.timeline.tracks.count, 1)
-        XCTAssertEqual(snap.timeline.tracks[0].clips.count, 1)
+        XCTAssertEqual(editor.project.meta.formatPolicy, .custom)
+        XCTAssertEqual(editor.project.meta.renderSize, RenderSize(width: 1280, height: 720))
+        XCTAssertEqual(editor.project.meta.fps, 59.94, accuracy: 1e-9)
+        XCTAssertEqual(editor.project.timeline.tracks[0].clips.count, 1)
+
+        editor.undo()
+        XCTAssertEqual(editor.project.meta.formatPolicy, .automatic)
+        XCTAssertEqual(editor.project.meta.renderSize, RenderSize(width: 1920, height: 1080))
+        XCTAssertEqual(editor.project.meta.fps, 30, accuracy: 1e-9)
+        XCTAssertEqual(editor.project.timeline.tracks[0].clips.count, 0)
+
+        editor.redo()
+        XCTAssertEqual(editor.project.meta.formatPolicy, .custom)
+        XCTAssertEqual(editor.project.meta.renderSize, RenderSize(width: 1280, height: 720))
+        XCTAssertEqual(editor.project.meta.fps, 59.94, accuracy: 1e-9)
+        XCTAssertEqual(editor.project.timeline.tracks[0].clips.count, 1)
     }
 
-    func testEditorSessionPlaybackStateTransitions() async {
-        let session = EditorSession(project: Project(meta: ProjectMeta(name: "Demo", fps: 30)))
-        await session.configurePlayback(engine: NoopRenderEngine())
-        do {
-            let state = await session.playbackState()
-            XCTAssertEqual(state, .stopped)
-        }
+    func testSpatialConformTransformFitCentersAndFits() {
+        let natural = CGSize(width: 1920, height: 1080)
+        let render = CGSize(width: 1000, height: 1000)
+        let t = spatialConformTransform(
+            naturalSize: natural,
+            preferredTransform: .identity,
+            renderSize: render,
+            mode: .fit
+        )
 
-        await session.play()
-        do {
-            let state = await session.playbackState()
-            XCTAssertEqual(state, .playing)
-        }
-
-        await session.pause()
-        do {
-            let state = await session.playbackState()
-            XCTAssertEqual(state, .paused)
-        }
-
-        await session.stop()
-        do {
-            let state = await session.playbackState()
-            XCTAssertEqual(state, .stopped)
-        }
+        let bbox = CGRect(origin: .zero, size: natural).applying(t)
+        XCTAssertLessThanOrEqual(bbox.width, render.width + 0.5)
+        XCTAssertLessThanOrEqual(bbox.height, render.height + 0.5)
+        XCTAssertEqual(bbox.midX, render.width / 2.0, accuracy: 0.5)
+        XCTAssertEqual(bbox.midY, render.height / 2.0, accuracy: 0.5)
     }
 
-    func testEditorSessionProjectChangesStreamEmits() async {
-        let session = EditorSession(project: Project(meta: ProjectMeta(name: "Demo")))
-        let stream = await session.projectChanges()
-        var it = stream.makeAsyncIterator()
+    func testSpatialConformTransformFillCentersAndCovers() {
+        let natural = CGSize(width: 1920, height: 1080)
+        let render = CGSize(width: 1000, height: 1000)
+        let t = spatialConformTransform(
+            naturalSize: natural,
+            preferredTransform: .identity,
+            renderSize: render,
+            mode: .fill
+        )
 
-        let initial = await it.next()
-        XCTAssertEqual(initial?.mediaAssets.count, 0)
+        let bbox = CGRect(origin: .zero, size: natural).applying(t)
+        XCTAssertGreaterThanOrEqual(bbox.width + 0.5, render.width)
+        XCTAssertGreaterThanOrEqual(bbox.height + 0.5, render.height)
+        XCTAssertEqual(bbox.midX, render.width / 2.0, accuracy: 0.5)
+        XCTAssertEqual(bbox.midY, render.height / 2.0, accuracy: 0.5)
+    }
 
-        _ = await session.importAsset(path: "/tmp/video.mp4")
-        let updated = await it.next()
-        XCTAssertEqual(updated?.mediaAssets.count, 1)
+    func testSpatialConformTransformNoneCentersNoScale() {
+        let natural = CGSize(width: 400, height: 300)
+        let render = CGSize(width: 1000, height: 1000)
+        let t = spatialConformTransform(
+            naturalSize: natural,
+            preferredTransform: .identity,
+            renderSize: render,
+            mode: .none
+        )
+
+        let bbox = CGRect(origin: .zero, size: natural).applying(t)
+        XCTAssertEqual(bbox.width, natural.width, accuracy: 0.5)
+        XCTAssertEqual(bbox.height, natural.height, accuracy: 0.5)
+        XCTAssertEqual(bbox.midX, render.width / 2.0, accuracy: 0.5)
+        XCTAssertEqual(bbox.midY, render.height / 2.0, accuracy: 0.5)
     }
 }

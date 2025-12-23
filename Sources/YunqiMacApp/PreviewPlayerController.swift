@@ -4,6 +4,7 @@ import CoreImage
 import ImageIO
 import QuartzCore
 import EditorCore
+import RenderEngine
 import Foundation
 import UniformTypeIdentifiers
 
@@ -20,6 +21,11 @@ final class PreviewPlayerController {
     private var lastProjectFingerprint: Int?
     private var buildTask: Task<Void, Never>?
     private var timeObserverToken: Any?
+    private var timeUpdateCallback: (@Sendable (Double) -> Void)?
+
+    private var reverseShuttleTimer: Timer?
+    private var reverseShuttleSeeking: Bool = false
+    private var wasMutedBeforeReverse: Bool = false
     private var itemStatusObservation: NSKeyValueObservation?
     private var itemErrorObservation: NSKeyValueObservation?
 
@@ -28,6 +34,8 @@ final class PreviewPlayerController {
     private let ciContext = CIContext(options: nil)
     private var didDumpVideoOutputFrame: Bool = false
     private weak var videoOutputItem: AVPlayerItem?
+
+    private(set) var currentVideoPreferredTransform: CGAffineTransform = .identity
 
     private static let overlayColorSpace: CGColorSpace = {
         CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
@@ -71,7 +79,11 @@ final class PreviewPlayerController {
         buildTask = Task { @MainActor [weak self] in
             guard let self else { return }
             self.onDebug?("Building preview item…")
-            let result = await Self.buildPlayerItem(for: project, allowDirectAsset: true)
+            // For long-term correctness, keep preview consistent with export by always
+            // going through the composition + videoComposition path.
+            // (The direct-asset fast path can hide compositor/conform issues and cause
+            // preview/export divergence.)
+            let result = await Self.buildPlayerItem(for: project, allowDirectAsset: false)
             if Task.isCancelled { return }
 
             // Detach any existing video output from the previous item *before* swapping.
@@ -134,11 +146,77 @@ final class PreviewPlayerController {
 
     func setRate(_ rate: Float) {
         requestedRate = rate
+
+        // AVPlayer doesn't support negative playback rates. Implement a simple reverse shuttle
+        // by repeatedly seeking backwards; video frames still come from AVPlayerItemVideoOutput.
+        if rate < 0 {
+            startReverseShuttle(rate: rate)
+            return
+        }
+
+        stopReverseShuttleIfNeeded()
         if rate == 0 {
             player.pause()
         } else {
             player.playImmediately(atRate: rate)
         }
+    }
+
+    private func startReverseShuttle(rate: Float) {
+        // Clamp to a reasonable range; TimelineNSView currently caps at 8x.
+        let r = max(-8, min(-0.1, rate))
+        requestedRate = r
+
+        // Ensure we are paused while shuttling.
+        player.pause()
+
+        if reverseShuttleTimer == nil {
+            wasMutedBeforeReverse = player.isMuted
+            player.isMuted = true
+        }
+
+        reverseShuttleTimer?.invalidate()
+        reverseShuttleSeeking = false
+
+        let tickHz: Double = 30.0
+        reverseShuttleTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / tickHz, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard !self.reverseShuttleSeeking else { return }
+                guard let item = self.player.currentItem else { return }
+
+                let current = item.currentTime().seconds
+                guard current.isFinite else { return }
+
+                let dt = (1.0 / tickHz) * Double(abs(self.requestedRate))
+                let targetSeconds = max(0.0, current - dt)
+                let target = CMTime(seconds: targetSeconds, preferredTimescale: 600)
+
+                self.reverseShuttleSeeking = true
+                self.player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        self.reverseShuttleSeeking = false
+                        self.timeUpdateCallback?(targetSeconds)
+
+                        // Stop cleanly at the start.
+                        if targetSeconds <= 0.000_001 {
+                            self.setRate(0)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Immediate UI update.
+        timeUpdateCallback?(player.currentTime().seconds)
+    }
+
+    private func stopReverseShuttleIfNeeded() {
+        reverseShuttleTimer?.invalidate()
+        reverseShuttleTimer = nil
+        reverseShuttleSeeking = false
+        player.isMuted = wasMutedBeforeReverse
     }
 
     func seek(seconds: Double, completion: (@Sendable () -> Void)? = nil) {
@@ -189,24 +267,33 @@ final class PreviewPlayerController {
             progressTask.cancel()
         }
 
-        try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            session.exportAsynchronously {
-                Task { @MainActor in
-                    let session = Unmanaged<AVAssetExportSession>.fromOpaque(sessionPtr.raw).takeUnretainedValue()
-                    let status = session.status
-                    let progress = Double(session.progress)
-                    let error = session.error
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                session.exportAsynchronously {
+                    Task { @MainActor in
+                        let session = Unmanaged<AVAssetExportSession>.fromOpaque(sessionPtr.raw).takeUnretainedValue()
+                        let status = session.status
+                        let progress = Double(session.progress)
+                        let error = session.error
 
-                    onProgress?(progress)
-                    switch status {
-                    case .completed:
-                        cont.resume()
-                    case .failed, .cancelled, .unknown, .waiting, .exporting:
-                        cont.resume(throwing: ExportError.exportFailed(status: status, underlying: error))
-                    @unknown default:
-                        cont.resume(throwing: ExportError.exportFailed(status: status, underlying: error))
+                        onProgress?(progress)
+                        switch status {
+                        case .completed:
+                            cont.resume()
+                        case .cancelled:
+                            cont.resume(throwing: CancellationError())
+                        case .failed, .unknown, .waiting, .exporting:
+                            cont.resume(throwing: ExportError.exportFailed(status: status, underlying: error))
+                        @unknown default:
+                            cont.resume(throwing: ExportError.exportFailed(status: status, underlying: error))
+                        }
                     }
                 }
+            }
+        } onCancel: {
+            Task { @MainActor in
+                let session = Unmanaged<AVAssetExportSession>.fromOpaque(sessionPtr.raw).takeUnretainedValue()
+                session.cancelExport()
             }
         }
 
@@ -215,6 +302,7 @@ final class PreviewPlayerController {
 
     func startTimeUpdates(_ onUpdate: @escaping @Sendable (Double) -> Void) {
         stopTimeUpdates()
+        timeUpdateCallback = onUpdate
         let interval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
         timeObserverToken = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
             onUpdate(time.seconds)
@@ -227,6 +315,7 @@ final class PreviewPlayerController {
             player.removeTimeObserver(token)
             timeObserverToken = nil
         }
+        timeUpdateCallback = nil
     }
 
     // MARK: - Video frame tap (overlay rendering)
@@ -277,6 +366,70 @@ final class PreviewPlayerController {
         }
     }
 
+    func startVideoPixelBufferUpdates(_ onPixelBuffer: @escaping @MainActor @Sendable (CVPixelBuffer?) -> Void) {
+        stopVideoFrameUpdates()
+
+        // Poll decoded output at ~30fps on main runloop.
+        videoFrameTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 30.0, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                guard let item = self.player.currentItem, let output = self.videoOutput else {
+                    onPixelBuffer(nil)
+                    return
+                }
+
+                let hostTime = CACurrentMediaTime()
+                var itemTime = output.itemTime(forHostTime: hostTime)
+                if !itemTime.isValid || !itemTime.isNumeric {
+                    itemTime = item.currentTime()
+                }
+
+                var displayTime = CMTime.zero
+                guard output.hasNewPixelBuffer(forItemTime: itemTime),
+                      let pb = output.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: &displayTime)
+                else {
+                    return
+                }
+
+                if Self.isPreviewFrameDumpEnabled, !self.didDumpVideoOutputFrame {
+                    self.didDumpVideoOutputFrame = true
+                    self.dumpVideoOutputPixelBufferPNG(pb)
+                }
+
+                onPixelBuffer(pb)
+            }
+        }
+    }
+
+    private func dumpVideoOutputPixelBufferPNG(_ pb: CVPixelBuffer) {
+        let ci = CIImage(cvPixelBuffer: pb)
+        let cg = self.ciContext.createCGImage(
+            ci,
+            from: ci.extent,
+            format: .BGRA8,
+            colorSpace: Self.overlayColorSpace
+        ) ?? self.ciContext.createCGImage(ci, from: ci.extent)
+
+        guard let cg else {
+            NSLog("[Preview] Failed to create CGImage from videoOutput pixelBuffer")
+            return
+        }
+
+        let url = URL(fileURLWithPath: "/tmp/yunqi-videooutput-pb-1.png")
+        DispatchQueue.global(qos: .utility).async {
+            guard let data = Self.pngData(from: cg) else {
+                NSLog("[Preview] Failed to encode videoOutput pixelBuffer as PNG")
+                return
+            }
+            do {
+                try data.write(to: url, options: [.atomic])
+                NSLog("[Preview] Saved videoOutput pixelBuffer PNG: %@", url.path)
+            } catch {
+                NSLog("[Preview] Failed to write videoOutput pixelBuffer PNG: %@ error=%@", url.path, String(describing: error))
+            }
+        }
+    }
+
     func stopVideoFrameUpdates() {
         videoFrameTimer?.invalidate()
         videoFrameTimer = nil
@@ -287,6 +440,7 @@ final class PreviewPlayerController {
         detachVideoOutputFromCurrentItemIfNeeded()
 
         // Use default output settings to avoid Swift 6 Sendable warnings from [String: Any].
+        // The Metal preview path handles common YUV formats efficiently via CVMetalTextureCache.
         let out = AVPlayerItemVideoOutput(pixelBufferAttributes: nil)
         item.add(out)
         videoOutput = out
@@ -295,6 +449,21 @@ final class PreviewPlayerController {
 
         // Encourage output to start producing data.
         out.requestNotificationOfMediaDataChange(withAdvanceInterval: 1.0 / 30.0)
+
+        // Track transform for correct orientation in Metal preview (and other raw-frame consumers).
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let tracks = try await item.asset.loadTracks(withMediaType: .video)
+                if let t = tracks.first {
+                    self.currentVideoPreferredTransform = (try? await t.load(.preferredTransform)) ?? .identity
+                } else {
+                    self.currentVideoPreferredTransform = .identity
+                }
+            } catch {
+                self.currentVideoPreferredTransform = .identity
+            }
+        }
     }
 
     private func dumpVideoOutputFramePNG(_ frame: CGImage) {
@@ -355,6 +524,27 @@ final class PreviewPlayerController {
 
         let naturalSize: CGSize
         let preferredTransform: CGAffineTransform
+    }
+
+    /// Build an export-ready asset for a project.
+    ///
+    /// This intentionally reuses the same composition logic as preview, but forces the
+    /// composition path (no direct-asset fast path) so trims/timeRanges are respected.
+    struct ExportBuildResult {
+        let asset: AVAsset
+        let videoComposition: AVVideoComposition?
+        let audioMix: AVAudioMix?
+    }
+
+    static func buildExportPipeline(for project: Project) async -> ExportBuildResult {
+        let result = await buildPlayerItem(for: project, allowDirectAsset: false)
+        let item = result.item
+        return ExportBuildResult(asset: item.asset, videoComposition: item.videoComposition, audioMix: item.audioMix)
+    }
+
+    static func buildExportAsset(for project: Project) async -> AVAsset {
+        let built = await buildExportPipeline(for: project)
+        return built.asset
     }
 
     private static func buildPlayerItem(for project: Project, allowDirectAsset: Bool) async -> PlayerItemBuildResult {
@@ -470,16 +660,23 @@ final class PreviewPlayerController {
         let hasAudioAdjustments = project.timeline.tracks.contains { $0.isMuted || $0.isSolo }
             || project.timeline.tracks.flatMap { $0.clips }.contains { abs($0.volume - 1.0) > 1e-9 }
 
+        let disableDirectAssetFastPath = ProcessInfo.processInfo.environment["YUNQI_DISABLE_DIRECT_ASSET"] == "1"
+
         // Fast path (debug & correctness baseline):
         // If timeline is a single clip starting at 0 with no speed/trim offsets, play the original asset directly.
         // NOTE: for export, we disable this so trims/timeRange are always reflected by the composition.
-        if allowDirectAsset, !hasAudioAdjustments, videoSegments.count == 1, let seg = videoSegments.first {
+        if allowDirectAsset, !disableDirectAssetFastPath, !hasAudioAdjustments, videoSegments.count == 1, let seg = videoSegments.first {
+            let projectCanvas = CGSize(width: project.meta.renderSize.width, height: project.meta.renderSize.height)
+            let segDisplay = seg.naturalSize.applying(seg.preferredTransform).absoluteSize
+            let approxSameCanvas = abs(projectCanvas.width - segDisplay.width) <= 0.5 && abs(projectCanvas.height - segDisplay.height) <= 0.5
+            let conformIsDefault = project.meta.spatialConformDefault == .fit
             let isSimple = abs(seg.start - 0) < 1e-9
                 && abs(seg.sourceIn - 0) < 1e-9
                 && abs(seg.displayDuration - seg.sourceDuration) < 1e-6
                 && abs(seg.displayDuration - (seg.end - seg.start)) < 1e-9
 
-            if isSimple {
+            // Only allow this if it doesn't bypass project-canvas conform.
+            if isSimple, approxSameCanvas, conformIsDefault {
                 let item = AVPlayerItem(asset: seg.asset)
                 let debug = ([
                     "Preview build: direct",
@@ -490,8 +687,8 @@ final class PreviewPlayerController {
             }
         }
 
-        // Determine render size from the first segment.
-        let renderSize = videoSegments.first?.naturalSize.applying(videoSegments.first?.preferredTransform ?? .identity).absoluteSize ?? CGSize(width: 1280, height: 720)
+        // Final Cut Pro-like viewer: render into the project canvas.
+        let renderSize = CGSize(width: project.meta.renderSize.width, height: project.meta.renderSize.height)
 
         // Partition segments into non-overlapping composition tracks.
         var lanes: [[Segment]] = []
@@ -523,6 +720,10 @@ final class PreviewPlayerController {
 
         let anySolo = project.timeline.tracks.contains { $0.isSolo }
         let clipVolumeById: [UUID: Double] = Dictionary(uniqueKeysWithValues: project.timeline.tracks.flatMap { $0.clips }.map { ($0.id, $0.volume) })
+
+        let clipConformById: [UUID: SpatialConform] = Dictionary(uniqueKeysWithValues: project.timeline.tracks.flatMap { $0.clips }.map {
+            ($0.id, $0.spatialConformOverride ?? project.meta.spatialConformDefault)
+        })
 
         let trackAudibleFactorById: [UUID: Double] = Dictionary(uniqueKeysWithValues: project.timeline.tracks.map { track in
             let audible = (!track.isMuted) && (!anySolo || track.isSolo)
@@ -578,47 +779,19 @@ final class PreviewPlayerController {
             }
         }
 
-        // Playable baseline: if there is no overlap (single lane), avoid our custom time-slice videoComposition.
-        // But we still need a videoComposition for correct orientation/size (composition may lose per-asset metadata).
-        if lanes.count == 1 {
-            // Preserve common orientation.
-            if let first = videoSegments.first {
-                compTracks[0].preferredTransform = first.preferredTransform
-            }
-
-            let item = AVPlayerItem(asset: composition)
-
-            if let audioParams {
-                let audioMix = AVMutableAudioMix()
-                audioMix.inputParameters = [audioParams]
-                item.audioMix = audioMix
-            }
-
-            // Let AVFoundation generate sane instructions (keeps playback "ready" and fixes blank video on some assets).
-            let systemVC = AVMutableVideoComposition(propertiesOf: composition)
-            systemVC.frameDuration = CMTime(seconds: 1.0 / max(1, project.meta.fps), preferredTimescale: timeScale)
-            // Prefer using our computed render size (absolute after transform) for stability.
-            systemVC.renderSize = renderSize
-            item.videoComposition = systemVC
-
-            let totalDuration = videoSegments.map { $0.end }.max() ?? 0
-            let debug = ([
-                "Preview build: composition",
-                "videoComposition=system",
-                "segments=\(videoSegments.count) lanes=\(lanes.count)",
-                String(format: "duration=%.2fs fps=%.0f", totalDuration, project.meta.fps),
-                "compositionVideoTracks=\(composition.tracks(withMediaType: .video).count)",
-                "compositionAudioTracks=\(composition.tracks(withMediaType: .audio).count)",
-                String(format: "renderSize=%.0fx%.0f", renderSize.width, renderSize.height),
-                collected.warnings.isEmpty ? nil : ("warnings:\n" + collected.warnings.joined(separator: "\n"))
-            ].compactMap { $0 }).joined(separator: "\n")
-            return PlayerItemBuildResult(item: item, debug: debug)
-        }
-
         // Build a video composition that selects the topmost visible segment per time slice.
         let videoComposition = AVMutableVideoComposition()
         videoComposition.renderSize = renderSize
         videoComposition.frameDuration = CMTime(seconds: 1.0 / max(1, project.meta.fps), preferredTimescale: timeScale)
+
+        // Default to our Metal-based compositor. This keeps preview/export semantics identical
+        // while moving composition work onto the GPU.
+        //
+        // Set YUNQI_VIDEO_COMPOSITOR=avfoundation to force AVFoundation's default compositor.
+        let compositorEnv = ProcessInfo.processInfo.environment["YUNQI_VIDEO_COMPOSITOR"]?.lowercased()
+        if compositorEnv != "avfoundation" && compositorEnv != "system" && compositorEnv != "default" {
+            videoComposition.customVideoCompositorClass = MetalVideoCompositor.self
+        }
 
         // IMPORTANT: build instruction boundaries in CMTime and derive timeRanges from those CMTime values.
         // Converting (Double start/end) -> CMTime separately can introduce tiny rounding gaps that show as flashes at cuts.
@@ -662,9 +835,16 @@ final class PreviewPlayerController {
 
                 if let chosenLaneIndex, chosenLaneIndex == laneIndex, let top {
                     layer.setOpacity(1.0, at: startTime)
-                    // Apply preferredTransform at the *current* instruction start time.
+                    // Apply project-canvas conform at the *current* instruction start time.
                     // Using .zero can leave later time slices untransformed (e.g. portrait videos become off-canvas).
-                    layer.setTransform(top.preferredTransform, at: startTime)
+                    let mode = clipConformById[top.clipId] ?? project.meta.spatialConformDefault
+                    let t = spatialConformTransform(
+                        naturalSize: top.naturalSize,
+                        preferredTransform: top.preferredTransform,
+                        renderSize: renderSize,
+                        mode: mode
+                    )
+                    layer.setTransform(t, at: startTime)
                 } else {
                     layer.setOpacity(0.0, at: startTime)
                 }
@@ -685,6 +865,12 @@ final class PreviewPlayerController {
 
         let item = AVPlayerItem(asset: composition)
         item.videoComposition = videoComposition
+
+        if let audioParams {
+            let audioMix = AVMutableAudioMix()
+            audioMix.inputParameters = [audioParams]
+            item.audioMix = audioMix
+        }
         let totalDuration = videoSegments.map { $0.end }.max() ?? 0
 
         let videoTrackCount = composition.tracks(withMediaType: .video).count
@@ -911,6 +1097,10 @@ final class PreviewPlayerController {
         // Cheap fingerprint: enough to trigger rebuild when timeline changes.
         var h = Hasher()
         h.combine(project.meta.fps)
+        h.combine(project.meta.formatPolicy)
+        h.combine(project.meta.renderSize.width)
+        h.combine(project.meta.renderSize.height)
+        h.combine(project.meta.spatialConformDefault)
         h.combine(project.mediaAssets.count)
         for a in project.mediaAssets {
             h.combine(a.id)
@@ -928,6 +1118,8 @@ final class PreviewPlayerController {
                 h.combine(c.sourceInSeconds)
                 h.combine(c.durationSeconds)
                 h.combine(c.speed)
+                h.combine(c.volume)
+                h.combine(c.spatialConformOverride)
             }
         }
         return h.finalize()

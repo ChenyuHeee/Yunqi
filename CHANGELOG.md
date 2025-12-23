@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.5.0 (2025-12-23)
+
+第五个测试版本：预览/导出统一走同一套时间线合成路径（composition + videoComposition），并修复 Metal 预览在适配（Fit）与全屏/窗口尺寸变化场景下的错位问题。
+
+### Highlights
+- 预览与导出一致性：预览不再走 direct-asset fast path，避免与导出产生差异
+- Metal 预览稳定性：修正贴图 UV 约定，解决全屏后角落播放/黑幕等显示问题
+- 合成链路增强：默认启用 Metal compositor，保留环境变量回退与调试能力
+
+### Notes
+- 仍为测试版：素材兼容性与性能继续迭代。
+
+### 安装与运行
+- 这是未签名/未公证的测试构建，macOS 可能提示“无法验证开发者”。
+- 下载 Release 里的 `Yunqi-<tag>-macos.zip`，解压后打开 `YunqiMacApp.app`（或在终端执行 `open YunqiMacApp.app`）。
+
 ## v0.4.0 (2025-12-22)
 
 第四个测试版本：对齐 Final Cut 的 Blade 语义，并完成 macOS App 形态的本地化（含系统菜单）与图标集成。

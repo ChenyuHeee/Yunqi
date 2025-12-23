@@ -491,6 +491,25 @@ private struct ClipCommands: View {
         }
         .keyboardShortcut(.delete, modifiers: [.shift])
         .disabled(!hasSelection)
+
+        Divider()
+
+        Menu(L("menu.clip.spatialConform")) {
+            Button(L("menu.clip.spatialConform.followProject")) {
+                workspace.setSpatialConformOverrideForSelection(nil)
+            }
+            Divider()
+            Button(L("menu.clip.spatialConform.fit")) {
+                workspace.setSpatialConformOverrideForSelection(.fit)
+            }
+            Button(L("menu.clip.spatialConform.fill")) {
+                workspace.setSpatialConformOverrideForSelection(.fill)
+            }
+            Button(L("menu.clip.spatialConform.none")) {
+                workspace.setSpatialConformOverrideForSelection(SpatialConform.none)
+            }
+        }
+        .disabled(!hasSelection)
     }
 }
 
@@ -629,6 +648,9 @@ private struct ContentView: View {
                     .layoutPriority(0)
             }
             .frame(minWidth: 0, maxWidth: .infinity)
+        }
+        .sheet(isPresented: $workspace.isExportDialogPresented) {
+            ExportDialogView(workspace: workspace)
         }
         .task {
             workspace.configurePlaybackIfNeeded()
@@ -775,11 +797,37 @@ private enum OpenTarget: String, CaseIterable, Identifiable {
 private enum AppPreferences {
     static let newProjectOpenTargetKey = "pref.newProject.openTarget"
     static let openProjectOpenTargetKey = "pref.openProject.openTarget"
+    static let canvasBackgroundKey = "pref.viewer.canvasBackground"
+}
+
+private enum CanvasBackgroundStyle: String, CaseIterable, Identifiable {
+    case black
+    case darkGray
+    case window
+
+    var id: String { rawValue }
+
+    var titleKey: String {
+        switch self {
+        case .black: return "ui.canvasBackground.black"
+        case .darkGray: return "ui.canvasBackground.darkGray"
+        case .window: return "ui.canvasBackground.window"
+        }
+    }
+
+    var nsColor: NSColor {
+        switch self {
+        case .black: return .black
+        case .darkGray: return .darkGray
+        case .window: return .windowBackgroundColor
+        }
+    }
 }
 
 private struct PreferencesView: View {
     @AppStorage(AppPreferences.newProjectOpenTargetKey) private var newProjectTargetRaw: String = OpenTarget.newTab.rawValue
     @AppStorage(AppPreferences.openProjectOpenTargetKey) private var openProjectTargetRaw: String = OpenTarget.newTab.rawValue
+    @AppStorage(AppPreferences.canvasBackgroundKey) private var canvasBackgroundRaw: String = CanvasBackgroundStyle.black.rawValue
 
     var body: some View {
         Form {
@@ -792,6 +840,12 @@ private struct PreferencesView: View {
             Picker(L("ui.preferences.openProjectOpenTarget"), selection: $openProjectTargetRaw) {
                 ForEach(OpenTarget.allCases) { t in
                     Text(t.title).tag(t.rawValue)
+                }
+            }
+
+            Picker(L("ui.preferences.canvasBackground"), selection: $canvasBackgroundRaw) {
+                ForEach(CanvasBackgroundStyle.allCases) { style in
+                    Text(L(style.titleKey)).tag(style.rawValue)
                 }
             }
         }
@@ -848,6 +902,42 @@ private struct SidebarView: View {
     @ObservedObject var workspace: ProjectWorkspace
     @ObservedObject var store: EditorSessionStore
 
+    private enum ClipConformSelection: String, CaseIterable, Identifiable {
+        case followProject
+        case fit
+        case fill
+        case none
+
+        var id: String { rawValue }
+
+        var overrideValue: SpatialConform? {
+            switch self {
+            case .followProject: return nil
+            case .fit: return .fit
+            case .fill: return .fill
+            case .none: return SpatialConform.none
+            }
+        }
+
+        static func fromOverride(_ value: SpatialConform?) -> ClipConformSelection {
+            switch value {
+            case nil: return .followProject
+            case .some(.fit): return .fit
+            case .some(.fill): return .fill
+            case .some(.none): return .none
+            }
+        }
+
+        var titleKey: String {
+            switch self {
+            case .followProject: return "ui.sidebar.spatialConform.followProject"
+            case .fit: return "ui.sidebar.spatialConform.fit"
+            case .fill: return "ui.sidebar.spatialConform.fill"
+            case .none: return "ui.sidebar.spatialConform.none"
+            }
+        }
+    }
+
     @State private var selectedAssetId: UUID?
     @State private var renamingAssetId: UUID?
     @State private var renameDraft: String = ""
@@ -874,6 +964,42 @@ private struct SidebarView: View {
                 Text("FPS: \(project.meta.fps, specifier: "%.0f")")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+            }
+
+            GroupBox(L("ui.sidebar.spatialConform")) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Picker(L("ui.sidebar.spatialConform.projectDefault"), selection: Binding(
+                        get: { project.meta.spatialConformDefault },
+                        set: { newValue in
+                            workspace.setProjectSpatialConformDefault(newValue)
+                        }
+                    )) {
+                        Text(L("ui.sidebar.spatialConform.fit")).tag(SpatialConform.fit)
+                        Text(L("ui.sidebar.spatialConform.fill")).tag(SpatialConform.fill)
+                        Text(L("ui.sidebar.spatialConform.none")).tag(SpatialConform.none)
+                    }
+                    .pickerStyle(.segmented)
+
+                    if let primaryId = workspace.primarySelectedClipId {
+                        let primaryClip = project.timeline.tracks
+                            .flatMap { $0.clips }
+                            .first(where: { $0.id == primaryId })
+
+                        if let primaryClip {
+                            Picker(L("ui.sidebar.spatialConform.clipOverride"), selection: Binding(
+                                get: { ClipConformSelection.fromOverride(primaryClip.spatialConformOverride) },
+                                set: { sel in
+                                    workspace.setSpatialConformOverrideForPrimarySelection(sel.overrideValue)
+                                }
+                            )) {
+                                ForEach(ClipConformSelection.allCases) { opt in
+                                    Text(L(opt.titleKey)).tag(opt)
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             Divider()
@@ -1054,14 +1180,41 @@ private struct KeyDownMonitorView: NSViewRepresentable {
 private struct PreviewView: View {
     @ObservedObject var workspace: ProjectWorkspace
 
+    @AppStorage(AppPreferences.canvasBackgroundKey) private var canvasBackgroundRaw: String = CanvasBackgroundStyle.black.rawValue
+
+    private static let isMetalPreviewEnabled: Bool = {
+        // Default to Metal for Apple Silicon-first performance & consistency.
+        // Allow forcing the legacy path via env var for debugging/compat.
+        let env = ProcessInfo.processInfo.environment["YUNQI_PREVIEW_RENDERER"]?.lowercased()
+        if env == "avfoundation" || env == "legacy" || env == "player" {
+            return false
+        }
+        return true
+    }()
+
     var body: some View {
+        let canvasBackground = CanvasBackgroundStyle(rawValue: canvasBackgroundRaw)?.nsColor ?? NSColor.black
         ZStack {
-            Rectangle().fill(.black)
-            PlayerViewRepresentable(
-                player: workspace.preview.player,
-                overlayFrame: workspace.previewFrameImage
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Rectangle().fill(Color(nsColor: .windowBackgroundColor))
+            if Self.isMetalPreviewEnabled {
+                MetalPreviewViewRepresentable(
+                    pixelBuffer: workspace.previewPixelBuffer,
+                    quality: workspace.preview.currentRequestedRate == 0 ? .high : .realtime,
+                    preferredTransform: workspace.previewPreferredTransform,
+                    canvasBackgroundColor: canvasBackground,
+                    canvasSize: CGSize(
+                        width: workspace.store.project.meta.renderSize.width,
+                        height: workspace.store.project.meta.renderSize.height
+                    )
+                )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                PlayerViewRepresentable(
+                    player: workspace.preview.player,
+                    overlayFrame: workspace.previewFrameImage
+                )
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

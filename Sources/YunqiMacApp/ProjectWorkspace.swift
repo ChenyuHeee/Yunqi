@@ -1,4 +1,5 @@
 import EditorCore
+import EditorEngine
 import AVFoundation
 import AppKit
 import Combine
@@ -37,6 +38,8 @@ final class ProjectWorkspace: ObservableObject {
     }
     @Published var previewPlayTapCount: Int = 0
     @Published var previewFrameImage: CGImage? = nil
+    @Published var previewPixelBuffer: CVPixelBuffer? = nil
+    @Published var previewPreferredTransform: CGAffineTransform = .identity
     @Published var previewFrameCount: Int = 0
     @Published var previewFrameSizeText: String = ""
 
@@ -45,6 +48,12 @@ final class ProjectWorkspace: ObservableObject {
     @Published var isExporting: Bool = false
     @Published var exportProgress: Double = 0
     @Published var exportStatusText: String = ""
+
+    @Published var isExportDialogPresented: Bool = false
+    @Published var exportDialogOutputURL: URL? = nil
+
+    private let exportQueue: ExportQueue
+    private var currentExportJobId: UUID? = nil
 
     // MARK: - Timeline selection (for menu commands)
 
@@ -79,8 +88,20 @@ final class ProjectWorkspace: ObservableObject {
     private var dirtyCancellable: AnyCancellable?
     private var lastSavedFingerprint: Data = Data()
 
+    private static let isMetalPreviewEnabled: Bool = {
+        // Default to Metal for Apple Silicon-first performance & consistency.
+        // Allow forcing the legacy path via env var for debugging/compat.
+        let env = ProcessInfo.processInfo.environment["YUNQI_PREVIEW_RENDERER"]?.lowercased()
+        if env == "avfoundation" || env == "legacy" || env == "player" {
+            return false
+        }
+        return true
+    }()
+
     init(projectStore: ProjectStore = JSONProjectStore()) {
         self.projectStore = projectStore
+
+        self.exportQueue = ExportQueue(executor: Self.makeExportExecutor())
 
         let project = Self.makeDefaultProject(name: L("app.name"), fps: 30)
         let session = EditorSession(project: project)
@@ -90,6 +111,14 @@ final class ProjectWorkspace: ObservableObject {
         self.lastSavedFingerprint = Self.fingerprint(project)
         self.isDirty = false
         startDirtyTracking()
+    }
+
+    private static func makeExportExecutor() -> any ExportExecutor {
+        let env = ProcessInfo.processInfo.environment["YUNQI_EXPORT_EXECUTOR"]?.lowercased()
+        if env == "writer" {
+            return AVAssetWriterExecutor()
+        }
+        return AVAssetExportSessionExecutor()
     }
 
     func updateTimelineSelection(selected: Set<UUID>, primary: UUID?) {
@@ -208,20 +237,33 @@ final class ProjectWorkspace: ObservableObject {
             }
         }
 
-        preview.startVideoFrameUpdates { [weak self] frame in
-            Task { @MainActor in
+        if Self.isMetalPreviewEnabled {
+            preview.startVideoPixelBufferUpdates { [weak self] pb in
                 guard let self else { return }
-                self.previewFrameImage = frame
-                if frame != nil {
+                self.previewPixelBuffer = pb
+                self.previewPreferredTransform = self.preview.currentVideoPreferredTransform
+                if let pb {
                     self.previewFrameCount += 1
-                    if let frame {
-                        self.previewFrameSizeText = "\(frame.width)x\(frame.height)"
-                    }
-                    let now = Date()
-                    self.previewLastFrameAt = now
-                    // Optional debug dump (disabled by default; can cause playback hitches).
-                    if Self.isPreviewFrameDumpEnabled, self.previewFrameCount == 1, let frame {
-                        self.saveOverlayFramePNGAsync(frame: frame, index: self.previewFrameCount)
+                    self.previewFrameSizeText = "\(CVPixelBufferGetWidth(pb))x\(CVPixelBufferGetHeight(pb))"
+                    self.previewLastFrameAt = Date()
+                }
+            }
+        } else {
+            preview.startVideoFrameUpdates { [weak self] frame in
+                Task { @MainActor in
+                    guard let self else { return }
+                    self.previewFrameImage = frame
+                    if frame != nil {
+                        self.previewFrameCount += 1
+                        if let frame {
+                            self.previewFrameSizeText = "\(frame.width)x\(frame.height)"
+                        }
+                        let now = Date()
+                        self.previewLastFrameAt = now
+                        // Optional debug dump (disabled by default; can cause playback hitches).
+                        if Self.isPreviewFrameDumpEnabled, self.previewFrameCount == 1, let frame {
+                            self.saveOverlayFramePNGAsync(frame: frame, index: self.previewFrameCount)
+                        }
                     }
                 }
             }
@@ -445,16 +487,37 @@ final class ProjectWorkspace: ObservableObject {
     }
 
     func presentExportPanel() {
+        // Legacy entry point: keep the name but show the new export dialog.
+        isExportDialogPresented = true
+    }
+
+    func chooseExportDialogOutputURL() {
         let panel = NSSavePanel()
         panel.canCreateDirectories = true
         panel.allowedContentTypes = [UTType.mpeg4Movie]
         panel.nameFieldStringValue = "Yunqi Export.mp4"
 
         if panel.runModal() == .OK, let url = panel.url {
-            Task { @MainActor in
-                await self.exportVideo(to: url)
-            }
+            exportDialogOutputURL = url
         }
+    }
+
+    func startExportFromDialog() {
+        guard let url = exportDialogOutputURL else {
+            NSSound.beep()
+            return
+        }
+        Task { @MainActor in
+            await self.exportVideo(to: url)
+        }
+    }
+
+    func cancelCurrentExport() {
+        guard let jobId = currentExportJobId else {
+            NSSound.beep()
+            return
+        }
+        exportQueue.cancel(jobId: jobId)
     }
 
     func exportVideo(to url: URL) async {
@@ -462,32 +525,54 @@ final class ProjectWorkspace: ObservableObject {
             NSSound.beep()
             return
         }
-        isExporting = true
+
+        // Capture a stable project snapshot at enqueue time.
+        let job = ExportJob(
+            project: store.project,
+            outputURL: url,
+            presetName: AVAssetExportPresetHighestQuality,
+            fileTypeIdentifier: AVFileType.mp4.rawValue
+        )
+        currentExportJobId = job.id
+
         exportProgress = 0
         exportStatusText = L("status.exporting")
+        isExporting = true
 
-        do {
-            try await preview.export(
-                project: store.project,
-                to: url,
-                presetName: AVAssetExportPresetHighestQuality,
-                fileType: .mp4,
-                onProgress: { [weak self] p in
-                    Task { @MainActor in
-                        self?.exportProgress = p
-                    }
-                }
-            )
-            exportProgress = 1
-            exportStatusText = String(format: L("status.exported"), url.lastPathComponent)
-            NSLog("[Export] Completed: %@", url.path)
-        } catch {
-            exportStatusText = String(format: L("status.exportFailed"), error.localizedDescription)
-            NSLog("[Export] Failed: %@", String(describing: error))
-            NSSound.beep()
+        exportQueue.enqueue(job)
+
+        // Poll queue state to update the existing toolbar/status fields.
+        // (We also show a dedicated export dialog; these fields remain as global status.)
+        while exportQueue.isRunning || exportQueue.hasQueued {
+            if let p = exportQueue.currentProgress {
+                exportProgress = p
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+
+        // Resolve final state of the just-enqueued job.
+        if let item = exportQueue.items.first(where: { $0.job.id == job.id }) {
+            switch item.state {
+            case .completed:
+                exportProgress = 1
+                exportStatusText = String(format: L("status.exported"), url.lastPathComponent)
+                NSLog("[Export] Completed: %@", url.path)
+            case let .failed(message):
+                exportStatusText = String(format: L("status.exportFailed"), message)
+                NSLog("[Export] Failed: %@", message)
+                NSSound.beep()
+            case .cancelled:
+                exportStatusText = L("status.exportCancelled")
+            case .queued, .running:
+                // Should not happen after the loop; keep a safe fallback.
+                exportStatusText = String(format: L("status.exportFailed"), "Unexpected export state")
+            }
         }
 
         isExporting = false
+        if currentExportJobId == job.id {
+            currentExportJobId = nil
+        }
     }
 
     // MARK: - Basic actions
@@ -513,6 +598,8 @@ final class ProjectWorkspace: ObservableObject {
         Task { @MainActor in
             // Decide target track kind based on the asset.
             var targetKind: TrackKind = .video
+            var autoLockRenderSize: RenderSize? = nil
+            var autoLockFPS: Double? = nil
             if let record = store.project.mediaAssets.first(where: { $0.id == assetId }) {
                 let url = URL(fileURLWithPath: record.originalPath)
                 let asset = AVURLAsset(url: url)
@@ -525,6 +612,42 @@ final class ProjectWorkspace: ObservableObject {
                         let audioTracks = (try? await asset.loadTracks(withMediaType: .audio)) ?? []
                         if !audioTracks.isEmpty {
                             targetKind = .audio
+                        }
+                    } else {
+                        // Final Cut Pro-like Automatic Settings: lock project format on the first valid video.
+                        if store.project.meta.formatPolicy == .automatic {
+                            let hasAnyVideoClip = store.project.timeline.tracks
+                                .filter { $0.kind == .video }
+                                .flatMap { $0.clips }
+                                .isEmpty == false
+
+                            if !hasAnyVideoClip, let first = videoTracks.first {
+                                let naturalSize = (try? await first.load(.naturalSize)) ?? .zero
+                                let preferredTransform = (try? await first.load(.preferredTransform)) ?? .identity
+                                let display = naturalSize.applying(preferredTransform)
+                                let w = Int((abs(display.width)).rounded())
+                                let h = Int((abs(display.height)).rounded())
+                                if w > 0, h > 0 {
+                                    autoLockRenderSize = RenderSize(width: w, height: h)
+                                }
+
+                                // Try to lock fps (Final Cut Pro Automatic Settings).
+                                // Prefer nominalFrameRate; fallback to minFrameDuration.
+                                let nominal = Double((try? await first.load(.nominalFrameRate)) ?? 0)
+                                let minFrameDuration = (try? await first.load(.minFrameDuration))
+
+                                var rawFps: Double = 0
+                                if nominal.isFinite, nominal > 1 {
+                                    rawFps = nominal
+                                } else if let d = minFrameDuration {
+                                    let s = d.seconds
+                                    if s.isFinite, s > 0.000001 {
+                                        rawFps = 1.0 / s
+                                    }
+                                }
+
+                                autoLockFPS = Self.normalizeFPS(rawFps)
+                            }
                         }
                     }
                 } catch {
@@ -646,13 +769,29 @@ final class ProjectWorkspace: ObservableObject {
                     timelineStartSeconds: finalStartSeconds,
                     sourceInSeconds: 0,
                     durationSeconds: durationSeconds,
-                    speed: 1.0
+                    speed: 1.0,
+                    autoLockProjectRenderSize: (targetKind == .video ? autoLockRenderSize : nil),
+                    autoLockProjectFPS: (targetKind == .video ? autoLockFPS : nil)
                 )
             } catch {
                 NSLog("Add clip failed: \(error)")
                 NSSound.beep()
             }
         }
+    }
+
+    private static func normalizeFPS(_ fps: Double) -> Double? {
+        guard fps.isFinite, fps > 1 else { return nil }
+        let candidates: [Double] = [23.976, 24, 25, 29.97, 30, 50, 59.94, 60]
+        var best: (value: Double, diff: Double)? = nil
+        for c in candidates {
+            let d = abs(c - fps)
+            if best == nil || d < best!.diff { best = (c, d) }
+        }
+        if let best, best.diff <= 0.25 {
+            return best.value
+        }
+        return fps
     }
 
     func undo() {
@@ -682,6 +821,49 @@ final class ProjectWorkspace: ObservableObject {
     }
 
     // MARK: - Clip actions (for menu commands)
+
+    private func targetClipIdsForSelection() -> [UUID] {
+        let ids = selectedClipIds.union(primarySelectedClipId.map { [$0] } ?? [])
+        return Array(ids)
+    }
+
+    func setProjectSpatialConformDefault(_ mode: SpatialConform) {
+        Task {
+            await store.setProjectSpatialConformDefault(mode)
+        }
+    }
+
+    /// Set spatial conform override for current selection (or primary selection if no multi-selection).
+    /// Pass nil to clear override (follow project default).
+    func setSpatialConformOverrideForSelection(_ mode: SpatialConform?) {
+        let ids = targetClipIdsForSelection()
+        guard !ids.isEmpty else {
+            NSSound.beep()
+            return
+        }
+
+        Task {
+            do {
+                try await store.setClipsSpatialConformOverride(clipIds: ids, override: mode)
+            } catch {
+                NSSound.beep()
+            }
+        }
+    }
+
+    func setSpatialConformOverrideForPrimarySelection(_ mode: SpatialConform?) {
+        guard let id = primarySelectedClipId else {
+            NSSound.beep()
+            return
+        }
+        Task {
+            do {
+                try await store.setClipSpatialConformOverride(clipId: id, override: mode)
+            } catch {
+                NSSound.beep()
+            }
+        }
+    }
 
     var canAdjustClipVolumeAtPlayhead: Bool {
         clipIdForPrimaryOrPlayhead(timeSeconds: previewTimeSeconds) != nil
