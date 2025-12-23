@@ -567,6 +567,16 @@ public final class ProjectEditor {
         execute(command)
     }
 
+    /// Slip audio (and video) content inside the clip without changing its timeline placement.
+    ///
+    /// This only changes `sourceInSeconds`.
+    public func slipClip(clipId: UUID, toSourceInSeconds newSourceInSeconds: Double) throws {
+        let (trackId, clip) = try locateClipFull(clipId: clipId)
+        let sourceIn = max(0, newSourceInSeconds)
+        guard abs(sourceIn - clip.sourceInSeconds) > 1e-12 else { return }
+        execute(SlipClipCommand(trackId: trackId, clipId: clipId, oldSourceInSeconds: clip.sourceInSeconds, newSourceInSeconds: sourceIn))
+    }
+
     public func deleteClip(clipId: UUID) throws {
         let located = try locateClipIndexed(clipId: clipId)
         let command = DeleteClipCommand(trackId: located.trackId, clipIndex: located.clipIndex, removed: located.clip)
@@ -830,6 +840,92 @@ public final class ProjectEditor {
         execute(command)
     }
 
+    public func setClipGain(clipId: UUID, gain: Double) throws {
+        let (trackId, clip) = try locateClipFull(clipId: clipId)
+        // Conservative clamp for now.
+        let newGain = max(0, min(gain, 2.0))
+        guard abs(newGain - clip.gain) > 1e-12 else { return }
+        execute(SetClipGainCommand(trackId: trackId, clipId: clipId, oldGain: clip.gain, newGain: newGain))
+    }
+
+    public func setClipPan(clipId: UUID, pan: Double) throws {
+        let (trackId, clip) = try locateClipFull(clipId: clipId)
+        let newPan = max(-1.0, min(pan, 1.0))
+        guard abs(newPan - clip.pan) > 1e-12 else { return }
+        execute(SetClipPanCommand(trackId: trackId, clipId: clipId, oldPan: clip.pan, newPan: newPan))
+    }
+
+    public func setClipAudioTimeStretchMode(clipId: UUID, mode: AudioTimeStretchMode) throws {
+        let (trackId, clip) = try locateClipFull(clipId: clipId)
+        guard clip.audioTimeStretchMode != mode else { return }
+        execute(SetClipAudioTimeStretchModeCommand(trackId: trackId, clipId: clipId, oldMode: clip.audioTimeStretchMode, newMode: mode))
+    }
+
+    public func setClipAudioReversePlaybackMode(clipId: UUID, mode: AudioReversePlaybackMode) throws {
+        let (trackId, clip) = try locateClipFull(clipId: clipId)
+        guard clip.audioReversePlaybackMode != mode else { return }
+        execute(SetClipAudioReversePlaybackModeCommand(trackId: trackId, clipId: clipId, oldMode: clip.audioReversePlaybackMode, newMode: mode))
+    }
+
+    public func setClipAudioMuted(clipId: UUID, isMuted: Bool) throws {
+        let (trackId, clip) = try locateClipFull(clipId: clipId)
+        guard clip.audioIsMuted != isMuted else { return }
+        execute(SetClipAudioMutedCommand(trackId: trackId, clipId: clipId, oldIsMuted: clip.audioIsMuted, newIsMuted: isMuted))
+    }
+
+    public func setClipAudioSolo(clipId: UUID, isSolo: Bool) throws {
+        let (trackId, clip) = try locateClipFull(clipId: clipId)
+        guard clip.audioIsSolo != isSolo else { return }
+        execute(SetClipAudioSoloCommand(trackId: trackId, clipId: clipId, oldIsSolo: clip.audioIsSolo, newIsSolo: isSolo))
+    }
+
+    public func setClipFadeIn(clipId: UUID, fade: AudioFade?) throws {
+        let (trackId, clip) = try locateClipFull(clipId: clipId)
+        let normalized: AudioFade? = {
+            guard let fade else { return nil }
+            let d = max(0, min(fade.durationSeconds, max(0, clip.durationSeconds)))
+            guard d > 0 else { return nil }
+            return AudioFade(durationSeconds: d, shape: fade.shape)
+        }()
+        guard clip.fadeIn != normalized else { return }
+        execute(SetClipFadeInCommand(trackId: trackId, clipId: clipId, oldFade: clip.fadeIn, newFade: normalized))
+    }
+
+    public func setClipFadeOut(clipId: UUID, fade: AudioFade?) throws {
+        let (trackId, clip) = try locateClipFull(clipId: clipId)
+        let normalized: AudioFade? = {
+            guard let fade else { return nil }
+            let d = max(0, min(fade.durationSeconds, max(0, clip.durationSeconds)))
+            guard d > 0 else { return nil }
+            return AudioFade(durationSeconds: d, shape: fade.shape)
+        }()
+        guard clip.fadeOut != normalized else { return }
+        execute(SetClipFadeOutCommand(trackId: trackId, clipId: clipId, oldFade: clip.fadeOut, newFade: normalized))
+    }
+
+    public func setClipAudioLoopRangeSeconds(clipId: UUID, loopRangeSeconds: AudioLoopRangeSeconds?) throws {
+        let (trackId, clip) = try locateClipFull(clipId: clipId)
+
+        // Normalize input: if provided but empty, treat as nil.
+        let normalized: AudioLoopRangeSeconds? = {
+            guard let loopRangeSeconds else { return nil }
+            if loopRangeSeconds.durationSeconds <= 0 { return nil }
+            return loopRangeSeconds
+        }()
+
+        // No-op if unchanged.
+        if clip.audioLoopRangeSeconds == normalized { return }
+
+        execute(
+            SetClipAudioLoopRangeSecondsCommand(
+                trackId: trackId,
+                clipId: clipId,
+                oldRange: clip.audioLoopRangeSeconds,
+                newRange: normalized
+            )
+        )
+    }
+
     public func toggleTrackMute(trackId: UUID) throws {
         let trackIndex = try locateTrackIndex(trackId: trackId)
         let old = project.timeline.tracks[trackIndex].isMuted
@@ -840,6 +936,22 @@ public final class ProjectEditor {
         let trackIndex = try locateTrackIndex(trackId: trackId)
         let old = project.timeline.tracks[trackIndex].isSolo
         execute(SetTrackSoloCommand(trackId: trackId, oldIsSolo: old, newIsSolo: !old))
+    }
+
+    public func setTrackVolume(trackId: UUID, volume: Double) throws {
+        let trackIndex = try locateTrackIndex(trackId: trackId)
+        let old = project.timeline.tracks[trackIndex].volume
+        let newVolume = max(0, min(volume, 2.0))
+        guard abs(newVolume - old) > 1e-12 else { return }
+        execute(SetTrackVolumeCommand(trackId: trackId, oldVolume: old, newVolume: newVolume))
+    }
+
+    public func setTrackPan(trackId: UUID, pan: Double) throws {
+        let trackIndex = try locateTrackIndex(trackId: trackId)
+        let old = project.timeline.tracks[trackIndex].pan
+        let newPan = max(-1.0, min(pan, 1.0))
+        guard abs(newPan - old) > 1e-12 else { return }
+        execute(SetTrackPanCommand(trackId: trackId, oldPan: old, newPan: newPan))
     }
 
     private func locateClip(clipId: UUID) throws -> (trackId: UUID, startSeconds: Double) {
@@ -1101,6 +1213,197 @@ private struct SetClipVolumeCommand: EditorCommand {
     }
 }
 
+private struct SetClipGainCommand: EditorCommand {
+    let trackId: UUID
+    let clipId: UUID
+    let oldGain: Double
+    let newGain: Double
+
+    var name: String { "Set Clip Gain" }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].gain = newGain
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].gain = oldGain
+    }
+}
+
+private struct SetClipPanCommand: EditorCommand {
+    let trackId: UUID
+    let clipId: UUID
+    let oldPan: Double
+    let newPan: Double
+
+    var name: String { "Set Clip Pan" }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].pan = newPan
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].pan = oldPan
+    }
+}
+
+private struct SetClipAudioTimeStretchModeCommand: EditorCommand {
+    let trackId: UUID
+    let clipId: UUID
+    let oldMode: AudioTimeStretchMode
+    let newMode: AudioTimeStretchMode
+
+    var name: String { "Set Audio Time Stretch Mode" }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].audioTimeStretchMode = newMode
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].audioTimeStretchMode = oldMode
+    }
+}
+
+private struct SetClipAudioReversePlaybackModeCommand: EditorCommand {
+    let trackId: UUID
+    let clipId: UUID
+    let oldMode: AudioReversePlaybackMode
+    let newMode: AudioReversePlaybackMode
+
+    var name: String { "Set Audio Reverse Playback Mode" }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].audioReversePlaybackMode = newMode
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].audioReversePlaybackMode = oldMode
+    }
+}
+
+private struct SetClipAudioMutedCommand: EditorCommand {
+    let trackId: UUID
+    let clipId: UUID
+    let oldIsMuted: Bool
+    let newIsMuted: Bool
+
+    var name: String { newIsMuted ? "Mute Clip Audio" : "Unmute Clip Audio" }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].audioIsMuted = newIsMuted
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].audioIsMuted = oldIsMuted
+    }
+}
+
+private struct SetClipAudioSoloCommand: EditorCommand {
+    let trackId: UUID
+    let clipId: UUID
+    let oldIsSolo: Bool
+    let newIsSolo: Bool
+
+    var name: String { newIsSolo ? "Solo Clip Audio" : "Unsolo Clip Audio" }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].audioIsSolo = newIsSolo
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].audioIsSolo = oldIsSolo
+    }
+}
+
+private struct SetClipFadeInCommand: EditorCommand {
+    let trackId: UUID
+    let clipId: UUID
+    let oldFade: AudioFade?
+    let newFade: AudioFade?
+
+    var name: String { newFade == nil ? "Clear Fade In" : "Set Fade In" }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].fadeIn = newFade
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].fadeIn = oldFade
+    }
+}
+
+private struct SetClipFadeOutCommand: EditorCommand {
+    let trackId: UUID
+    let clipId: UUID
+    let oldFade: AudioFade?
+    let newFade: AudioFade?
+
+    var name: String { newFade == nil ? "Clear Fade Out" : "Set Fade Out" }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].fadeOut = newFade
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].fadeOut = oldFade
+    }
+}
+
+private struct SetClipAudioLoopRangeSecondsCommand: EditorCommand {
+    let trackId: UUID
+    let clipId: UUID
+    let oldRange: AudioLoopRangeSeconds?
+    let newRange: AudioLoopRangeSeconds?
+
+    var name: String {
+        newRange == nil ? "Clear Audio Loop" : "Set Audio Loop"
+    }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].audioLoopRangeSeconds = newRange
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].audioLoopRangeSeconds = oldRange
+    }
+}
+
 private struct SetTrackMuteCommand: EditorCommand {
     let trackId: UUID
     let oldIsMuted: Bool
@@ -1134,6 +1437,42 @@ private struct SetTrackSoloCommand: EditorCommand {
     func revert(on project: inout Project) {
         guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
         project.timeline.tracks[trackIndex].isSolo = oldIsSolo
+    }
+}
+
+private struct SetTrackVolumeCommand: EditorCommand {
+    let trackId: UUID
+    let oldVolume: Double
+    let newVolume: Double
+
+    var name: String { "Set Track Volume" }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        project.timeline.tracks[trackIndex].volume = newVolume
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        project.timeline.tracks[trackIndex].volume = oldVolume
+    }
+}
+
+private struct SetTrackPanCommand: EditorCommand {
+    let trackId: UUID
+    let oldPan: Double
+    let newPan: Double
+
+    var name: String { "Set Track Pan" }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        project.timeline.tracks[trackIndex].pan = newPan
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        project.timeline.tracks[trackIndex].pan = oldPan
     }
 }
 
@@ -1401,11 +1740,138 @@ private struct TrimClipCommand: EditorCommand {
     }
 }
 
+private struct SlipClipCommand: EditorCommand {
+    let trackId: UUID
+    let clipId: UUID
+    let oldSourceInSeconds: Double
+    let newSourceInSeconds: Double
+
+    var name: String { "Slip Clip" }
+
+    func apply(to project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].sourceInSeconds = newSourceInSeconds
+    }
+
+    func revert(on project: inout Project) {
+        guard let trackIndex = project.timeline.tracks.firstIndex(where: { $0.id == trackId }) else { return }
+        guard let clipIndex = project.timeline.tracks[trackIndex].clips.firstIndex(where: { $0.id == clipId }) else { return }
+        project.timeline.tracks[trackIndex].clips[clipIndex].sourceInSeconds = oldSourceInSeconds
+    }
+}
+
 public enum TrackKind: String, Codable, Sendable {
     case video
     case audio
     case titles
     case adjustment
+}
+
+// MARK: - Audio (data model)
+
+public enum AudioTimeStretchMode: String, Codable, Sendable {
+    /// Default: keep pitch when changing speed.
+    case keepPitch
+    /// Varispeed: pitch changes with speed.
+    case varispeed
+    /// Audio is muted (useful for extreme rates or reverse).
+    case muteAudio
+}
+
+public enum AudioReversePlaybackMode: String, Codable, Sendable {
+    /// Default: mute audio when playing backwards in realtime.
+    case mute
+    /// Low quality reverse (future).
+    case roughReverse
+    /// High quality reverse (future, typically offline).
+    case highQualityReverse
+}
+
+/// Loop range expressed in source seconds.
+///
+/// Semantics:
+/// - `startSeconds` is inclusive
+/// - `endSeconds` is exclusive
+/// - When `endSeconds <= startSeconds`, the range is treated as empty.
+public struct AudioLoopRangeSeconds: Codable, Sendable, Hashable {
+    public var startSeconds: Double
+    public var endSeconds: Double
+
+    public init(startSeconds: Double, endSeconds: Double) {
+        self.startSeconds = max(0, startSeconds)
+        self.endSeconds = max(self.startSeconds, endSeconds)
+    }
+
+    public var durationSeconds: Double {
+        max(0, endSeconds - startSeconds)
+    }
+}
+
+/// Final Cut Pro-like roles. Names are a stable serialized interface.
+public struct AudioRole: Codable, Sendable, Hashable {
+    public var name: String
+
+    public init(name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.name = trimmed.isEmpty ? "custom" : trimmed
+    }
+
+    public static let dialogue = AudioRole(name: "dialogue")
+    public static let music = AudioRole(name: "music")
+    public static let effects = AudioRole(name: "effects")
+}
+
+public struct AudioSubrole: Codable, Sendable, Hashable {
+    public var name: String
+
+    public init(name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.name = trimmed.isEmpty ? "custom" : trimmed
+    }
+}
+
+public enum AutomationInterpolation: String, Codable, Sendable {
+    case hold
+    case linear
+}
+
+public enum AudioFadeShape: String, Codable, Sendable, Hashable {
+    case linear
+    case equalPower
+}
+
+public struct AudioFade: Codable, Sendable, Hashable {
+    public var durationSeconds: Double
+    public var shape: AudioFadeShape
+
+    public init(durationSeconds: Double, shape: AudioFadeShape = .linear) {
+        self.durationSeconds = durationSeconds
+        self.shape = shape
+    }
+}
+
+public struct AudioAutomationKeyframe<T: Codable & Sendable & Hashable>: Codable, Sendable, Hashable {
+    public var timeSeconds: Double
+    public var value: T
+    public var interpolation: AutomationInterpolation
+
+    public init(timeSeconds: Double, value: T, interpolation: AutomationInterpolation = .linear) {
+        self.timeSeconds = timeSeconds
+        self.value = value
+        self.interpolation = interpolation
+    }
+}
+
+public struct AudioAutomationCurve<T: Codable & Sendable & Hashable>: Codable, Sendable, Hashable {
+    /// Bump this when serialized shape changes.
+    public var version: Int
+    public var keyframes: [AudioAutomationKeyframe<T>]
+
+    public init(version: Int = 1, keyframes: [AudioAutomationKeyframe<T>] = []) {
+        self.version = version
+        self.keyframes = keyframes
+    }
 }
 
 public struct Track: Codable, Sendable {
@@ -1417,18 +1883,37 @@ public struct Track: Codable, Sendable {
     public var isMuted: Bool
     public var isSolo: Bool
 
+    // Audio controls (future-proof)
+    public var volume: Double
+    public var pan: Double
+
+    // Routing / roles (reserved)
+    public var role: AudioRole?
+    public var subrole: AudioSubrole?
+    public var outputBusId: UUID?
+
     public init(
         id: UUID = UUID(),
         kind: TrackKind,
         clips: [Clip] = [],
         isMuted: Bool = false,
-        isSolo: Bool = false
+        isSolo: Bool = false,
+        volume: Double = 1.0,
+        pan: Double = 0.0,
+        role: AudioRole? = nil,
+        subrole: AudioSubrole? = nil,
+        outputBusId: UUID? = nil
     ) {
         self.id = id
         self.kind = kind
         self.clips = clips
         self.isMuted = isMuted
         self.isSolo = isSolo
+        self.volume = volume
+        self.pan = pan
+        self.role = role
+        self.subrole = subrole
+        self.outputBusId = outputBusId
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -1437,6 +1922,11 @@ public struct Track: Codable, Sendable {
         case clips
         case isMuted
         case isSolo
+        case volume
+        case pan
+        case role
+        case subrole
+        case outputBusId
     }
 
     public init(from decoder: any Decoder) throws {
@@ -1446,6 +1936,12 @@ public struct Track: Codable, Sendable {
         clips = try c.decode([Clip].self, forKey: .clips)
         isMuted = try c.decodeIfPresent(Bool.self, forKey: .isMuted) ?? false
         isSolo = try c.decodeIfPresent(Bool.self, forKey: .isSolo) ?? false
+
+        volume = try c.decodeIfPresent(Double.self, forKey: .volume) ?? 1.0
+        pan = try c.decodeIfPresent(Double.self, forKey: .pan) ?? 0.0
+        role = try c.decodeIfPresent(AudioRole.self, forKey: .role)
+        subrole = try c.decodeIfPresent(AudioSubrole.self, forKey: .subrole)
+        outputBusId = try c.decodeIfPresent(UUID.self, forKey: .outputBusId)
     }
 }
 
@@ -1464,6 +1960,27 @@ public struct Clip: Codable, Sendable {
     // Audio params (MVP)
     public var volume: Double
 
+    // Audio params (future-proof)
+    public var gain: Double
+    public var pan: Double
+    public var audioIsMuted: Bool
+    public var audioIsSolo: Bool
+    public var volumeAutomation: AudioAutomationCurve<Double>?
+    public var panAutomation: AudioAutomationCurve<Double>?
+
+    public var fadeIn: AudioFade?
+    public var fadeOut: AudioFade?
+
+    public var audioTimeStretchMode: AudioTimeStretchMode
+    public var audioReversePlaybackMode: AudioReversePlaybackMode
+
+    /// Optional loop range in source seconds.
+    /// When set, audio time mapping wraps within this range.
+    public var audioLoopRangeSeconds: AudioLoopRangeSeconds?
+    public var role: AudioRole?
+    public var subrole: AudioSubrole?
+    public var outputBusId: UUID?
+
     // Spatial conform (Final Cut-style)
     public var spatialConformOverride: SpatialConform?
 
@@ -1475,6 +1992,20 @@ public struct Clip: Codable, Sendable {
         durationSeconds: Double,
         speed: Double = 1.0,
         volume: Double = 1.0,
+        gain: Double = 1.0,
+        pan: Double = 0.0,
+        audioIsMuted: Bool = false,
+        audioIsSolo: Bool = false,
+        volumeAutomation: AudioAutomationCurve<Double>? = nil,
+        panAutomation: AudioAutomationCurve<Double>? = nil,
+        fadeIn: AudioFade? = nil,
+        fadeOut: AudioFade? = nil,
+        audioTimeStretchMode: AudioTimeStretchMode = .keepPitch,
+        audioReversePlaybackMode: AudioReversePlaybackMode = .mute,
+        audioLoopRangeSeconds: AudioLoopRangeSeconds? = nil,
+        role: AudioRole? = nil,
+        subrole: AudioSubrole? = nil,
+        outputBusId: UUID? = nil,
         spatialConformOverride: SpatialConform? = nil
     ) {
         self.id = id
@@ -1484,6 +2015,20 @@ public struct Clip: Codable, Sendable {
         self.durationSeconds = durationSeconds
         self.speed = speed
         self.volume = volume
+        self.gain = gain
+        self.pan = pan
+        self.audioIsMuted = audioIsMuted
+        self.audioIsSolo = audioIsSolo
+        self.volumeAutomation = volumeAutomation
+        self.panAutomation = panAutomation
+        self.fadeIn = fadeIn
+        self.fadeOut = fadeOut
+        self.audioTimeStretchMode = audioTimeStretchMode
+        self.audioReversePlaybackMode = audioReversePlaybackMode
+        self.audioLoopRangeSeconds = audioLoopRangeSeconds
+        self.role = role
+        self.subrole = subrole
+        self.outputBusId = outputBusId
         self.spatialConformOverride = spatialConformOverride
     }
 
@@ -1495,6 +2040,20 @@ public struct Clip: Codable, Sendable {
         case durationSeconds
         case speed
         case volume
+        case gain
+        case pan
+        case audioIsMuted
+        case audioIsSolo
+        case volumeAutomation
+        case panAutomation
+        case fadeIn
+        case fadeOut
+        case audioTimeStretchMode
+        case audioReversePlaybackMode
+        case audioLoopRangeSeconds
+        case role
+        case subrole
+        case outputBusId
         case spatialConformOverride
     }
 
@@ -1507,6 +2066,24 @@ public struct Clip: Codable, Sendable {
         durationSeconds = try c.decode(Double.self, forKey: .durationSeconds)
         speed = try c.decodeIfPresent(Double.self, forKey: .speed) ?? 1.0
         volume = try c.decodeIfPresent(Double.self, forKey: .volume) ?? 1.0
+
+        gain = try c.decodeIfPresent(Double.self, forKey: .gain) ?? 1.0
+        pan = try c.decodeIfPresent(Double.self, forKey: .pan) ?? 0.0
+        audioIsMuted = try c.decodeIfPresent(Bool.self, forKey: .audioIsMuted) ?? false
+        audioIsSolo = try c.decodeIfPresent(Bool.self, forKey: .audioIsSolo) ?? false
+        volumeAutomation = try c.decodeIfPresent(AudioAutomationCurve<Double>.self, forKey: .volumeAutomation)
+        panAutomation = try c.decodeIfPresent(AudioAutomationCurve<Double>.self, forKey: .panAutomation)
+
+        fadeIn = try c.decodeIfPresent(AudioFade.self, forKey: .fadeIn)
+        fadeOut = try c.decodeIfPresent(AudioFade.self, forKey: .fadeOut)
+
+        audioTimeStretchMode = try c.decodeIfPresent(AudioTimeStretchMode.self, forKey: .audioTimeStretchMode) ?? .keepPitch
+        audioReversePlaybackMode = try c.decodeIfPresent(AudioReversePlaybackMode.self, forKey: .audioReversePlaybackMode) ?? .mute
+        audioLoopRangeSeconds = try c.decodeIfPresent(AudioLoopRangeSeconds.self, forKey: .audioLoopRangeSeconds)
+        role = try c.decodeIfPresent(AudioRole.self, forKey: .role)
+        subrole = try c.decodeIfPresent(AudioSubrole.self, forKey: .subrole)
+        outputBusId = try c.decodeIfPresent(UUID.self, forKey: .outputBusId)
+
         spatialConformOverride = try c.decodeIfPresent(SpatialConform.self, forKey: .spatialConformOverride)
     }
 }

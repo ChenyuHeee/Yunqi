@@ -10,12 +10,16 @@ let package = Package(
     products: [
         .executable(name: "YunqiApp", targets: ["YunqiApp"]),
         .executable(name: "YunqiMacApp", targets: ["YunqiMacApp"]),
+        .library(name: "AudioEngine", targets: ["AudioEngine"]),
         .library(name: "EditorCore", targets: ["EditorCore"]),
         .library(name: "EditorEngine", targets: ["EditorEngine"]),
         .library(name: "MediaIO", targets: ["MediaIO"]),
         .library(name: "RenderEngine", targets: ["RenderEngine"]),
         .library(name: "Storage", targets: ["Storage"]),
         .library(name: "UIBridge", targets: ["UIBridge"])
+    ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-atomics.git", from: "1.2.0")
     ],
     targets: [
         .executableTarget(
@@ -43,6 +47,13 @@ let package = Package(
             ]
         ),
         .target(
+            name: "AudioEngine",
+            dependencies: [
+                .product(name: "Atomics", package: "swift-atomics")
+            ],
+            path: "Sources/AudioEngine"
+        ),
+        .target(
             name: "EditorCore",
             dependencies: [],
             path: "Sources/EditorCore"
@@ -50,6 +61,7 @@ let package = Package(
         .target(
             name: "EditorEngine",
             dependencies: [
+                "AudioEngine",
                 "EditorCore",
                 "RenderEngine"
             ],
@@ -57,7 +69,9 @@ let package = Package(
         ),
         .target(
             name: "MediaIO",
-            dependencies: [],
+            dependencies: [
+                "AudioEngine"
+            ],
             path: "Sources/MediaIO"
         ),
         .target(
@@ -68,7 +82,9 @@ let package = Package(
         .target(
             name: "Storage",
             dependencies: [
-                "EditorCore"
+                "AudioEngine",
+                "EditorCore",
+                "MediaIO"
             ],
             path: "Sources/Storage"
         ),
@@ -83,7 +99,12 @@ let package = Package(
         ),
         .testTarget(
             name: "EditorCoreTests",
-            dependencies: ["EditorCore"],
+            dependencies: [
+                "AudioEngine",
+                "EditorCore",
+                "RenderEngine",
+                "Storage"
+            ],
             path: "Tests/EditorCoreTests"
         ),
         .testTarget(
@@ -91,9 +112,14 @@ let package = Package(
             dependencies: [
                 "EditorCore",
                 "EditorEngine",
+                "MediaIO",
+                "Storage",
                 "RenderEngine"
             ],
-            path: "Tests/EditorEngineTests"
+            path: "Tests/EditorEngineTests",
+            resources: [
+                .process("Goldens")
+            ]
         )
     ]
 )

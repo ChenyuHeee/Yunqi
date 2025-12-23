@@ -31,7 +31,7 @@ final class PreviewPlayerController {
 
     private var videoOutput: AVPlayerItemVideoOutput?
     private var videoFrameTimer: Timer?
-    private let ciContext = CIContext(options: nil)
+    private var ciContext: CIContext?
     private var didDumpVideoOutputFrame: Bool = false
     private weak var videoOutputItem: AVPlayerItem?
 
@@ -40,6 +40,15 @@ final class PreviewPlayerController {
     private static let overlayColorSpace: CGColorSpace = {
         CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
     }()
+
+    private func ciContextForOverlay() -> CIContext {
+        if let ciContext {
+            return ciContext
+        }
+        let ctx = CIContext(options: nil)
+        ciContext = ctx
+        return ctx
+    }
 
     private static let isPreviewFrameDumpEnabled: Bool = {
         let env = ProcessInfo.processInfo.environment
@@ -348,12 +357,13 @@ final class PreviewPlayerController {
                 let ci = CIImage(cvPixelBuffer: pb)
 
                 // Be explicit about output format/colorspace; some systems otherwise yield a white CGImage.
-                let cg = self.ciContext.createCGImage(
+                let ctx = self.ciContextForOverlay()
+                let cg = ctx.createCGImage(
                     ci,
                     from: ci.extent,
                     format: .BGRA8,
                     colorSpace: Self.overlayColorSpace
-                ) ?? self.ciContext.createCGImage(ci, from: ci.extent)
+                ) ?? ctx.createCGImage(ci, from: ci.extent)
 
                 if let cg {
                     if Self.isPreviewFrameDumpEnabled, !self.didDumpVideoOutputFrame {
@@ -403,12 +413,13 @@ final class PreviewPlayerController {
 
     private func dumpVideoOutputPixelBufferPNG(_ pb: CVPixelBuffer) {
         let ci = CIImage(cvPixelBuffer: pb)
-        let cg = self.ciContext.createCGImage(
+        let ctx = self.ciContextForOverlay()
+        let cg = ctx.createCGImage(
             ci,
             from: ci.extent,
             format: .BGRA8,
             colorSpace: Self.overlayColorSpace
-        ) ?? self.ciContext.createCGImage(ci, from: ci.extent)
+        ) ?? ctx.createCGImage(ci, from: ci.extent)
 
         guard let cg else {
             NSLog("[Preview] Failed to create CGImage from videoOutput pixelBuffer")
@@ -439,8 +450,9 @@ final class PreviewPlayerController {
         // Detach any previous output defensively.
         detachVideoOutputFromCurrentItemIfNeeded()
 
-        // Use default output settings to avoid Swift 6 Sendable warnings from [String: Any].
-        // The Metal preview path handles common YUV formats efficiently via CVMetalTextureCache.
+        // Keep default output settings.
+        // Note: providing pixelBufferAttributes here triggers Swift 6 Sendable warnings due to [String: Any].
+        // The Metal preview path still handles common YUV formats efficiently via CVMetalTextureCache.
         let out = AVPlayerItemVideoOutput(pixelBufferAttributes: nil)
         item.add(out)
         videoOutput = out

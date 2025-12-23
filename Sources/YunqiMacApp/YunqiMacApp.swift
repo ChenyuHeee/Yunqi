@@ -3156,6 +3156,15 @@ private final class TimelineNSView: NSView {
     private var waveformInFlight: Set<UUID> = []
     private var waveformNoAudio: Set<UUID> = []
 
+    private lazy var persistentWaveformCache: Storage.WaveformCache = {
+        let fm = FileManager.default
+        let caches = (try? fm.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)) ?? fm.temporaryDirectory
+        let dir = caches
+            .appendingPathComponent("yunqi", isDirectory: true)
+            .appendingPathComponent("waveforms", isDirectory: true)
+        return Storage.WaveformCache(baseURL: dir)
+    }()
+
     private func assetURL(for assetId: UUID) -> URL? {
         guard let record = project.mediaAssets.first(where: { $0.id == assetId }) else { return nil }
         return URL(fileURLWithPath: record.originalPath)
@@ -3317,7 +3326,7 @@ private final class TimelineNSView: NSView {
 
         Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
-            let samples = await self.generateWaveform(url: url, startSeconds: start, durationSeconds: duration, desiredCount: desiredCount)
+            let samples = await self.generateWaveform(assetId: clip.assetId, url: url, startSeconds: start, durationSeconds: duration, desiredCount: desiredCount)
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.waveformInFlight.remove(clipId)
@@ -3361,70 +3370,22 @@ private final class TimelineNSView: NSView {
     }
 
     private func generateWaveform(
+        assetId: UUID,
         url: URL,
         startSeconds: Double,
         durationSeconds: Double,
         desiredCount: Int
     ) async -> [Float]? {
-        let asset = AVURLAsset(url: url)
+        let count = max(16, min(256, desiredCount))
         do {
-            let tracks = try await asset.loadTracks(withMediaType: .audio)
-            guard let track = tracks.first else { return nil }
-
-            let reader = try AVAssetReader(asset: asset)
-            let outputSettings: [String: Any] = [
-                AVFormatIDKey: kAudioFormatLinearPCM,
-                AVLinearPCMIsFloatKey: false,
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsBigEndianKey: false,
-                AVLinearPCMIsNonInterleaved: false
-            ]
-            let output = AVAssetReaderTrackOutput(track: track, outputSettings: outputSettings)
-            output.alwaysCopiesSampleData = false
-            reader.add(output)
-
-            let start = CMTime(seconds: max(0, startSeconds), preferredTimescale: 600)
-            let dur = CMTime(seconds: max(0.05, durationSeconds), preferredTimescale: 600)
-            reader.timeRange = CMTimeRange(start: start, duration: dur)
-
-            guard reader.startReading() else { return nil }
-
-            var rmsValues: [Float] = []
-            rmsValues.reserveCapacity(512)
-
-            while reader.status == .reading {
-                guard let sb = output.copyNextSampleBuffer() else { break }
-                guard let block = CMSampleBufferGetDataBuffer(sb) else { continue }
-
-                var totalLength: Int = 0
-                var dataPointer: UnsafeMutablePointer<Int8>?
-                let status = CMBlockBufferGetDataPointer(
-                    block,
-                    atOffset: 0,
-                    lengthAtOffsetOut: nil,
-                    totalLengthOut: &totalLength,
-                    dataPointerOut: &dataPointer
-                )
-                if status != kCMBlockBufferNoErr { continue }
-                guard let dataPointer, totalLength >= 2 else { continue }
-
-                let sampleCount = totalLength / MemoryLayout<Int16>.size
-                if sampleCount <= 0 { continue }
-
-                let ptr = dataPointer.withMemoryRebound(to: Int16.self, capacity: sampleCount) { $0 }
-                var peak: Double = 0
-                for i in 0..<sampleCount {
-                    let v = abs(Double(ptr[i]) / Double(Int16.max))
-                    if v > peak { peak = v }
-                }
-                rmsValues.append(Float(peak))
-            }
-
-            if rmsValues.isEmpty { return nil }
-
-            let maxVal = rmsValues.max() ?? 1
-            let normalized = maxVal > 0 ? rmsValues.map { $0 / maxVal } : rmsValues
-            return resample(values: normalized, to: max(16, min(256, desiredCount)))
+            let base = try await persistentWaveformCache.loadOrCompute(
+                assetId: assetId,
+                url: url,
+                startSeconds: max(0, startSeconds),
+                durationSeconds: max(0.05, durationSeconds)
+            )
+            let resampled = persistentWaveformCache.resampled(base, desiredCount: count)
+            return resampled.peak
         } catch {
             return nil
         }

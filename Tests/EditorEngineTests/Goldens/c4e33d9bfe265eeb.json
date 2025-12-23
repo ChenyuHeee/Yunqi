@@ -1,0 +1,13 @@
+{
+  "algorithmVersion" : 1,
+  "format" : {
+    "channelCount" : 2,
+    "sampleRate" : 48000
+  },
+  "frameCount" : 1600,
+  "hash64" : 2087184021574383397,
+  "stats" : {
+    "peak" : 1604,
+    "rms" : 1604
+  }
+}

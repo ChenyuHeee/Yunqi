@@ -27,8 +27,8 @@
 ## 1. 数据模型与命令系统（EditorCore）
 
 ### 1.1 Clip/Track 音频属性（面向最终形态一次到位）
-- [ ] Clip 音频基础属性：gain、mute、solo（如果 clip 级别需要）、pan/balance、通道映射（L/R/mono）
-- [ ] Fade：入/出淡入淡出（形状：线性/等功率等，先定义枚举并可扩展）
+- [x] Clip 音频基础属性：gain、mute、solo（如果 clip 级别需要）、pan/balance、通道映射（L/R/mono）（阶段性已落地：clip mute/solo 数据模型 + 命令 + evaluator 语义）
+- [x] Fade：入/出淡入淡出（形状：线性/等功率等，Phase 1：数据模型 + 命令 + evaluator 语义节点，DSP 后续落地）
 - [ ] Automation：
   - [ ] 音量曲线（关键帧：time,value；插值类型；曲线张力/平滑）
   - [ ] Pan 曲线
@@ -40,6 +40,13 @@
 - [ ] 每个音频编辑动作都有 Command（一次操作一次撤销）
 - [ ] 命令可序列化（可选，用于诊断与宏/脚本化）
 
+- [x] 已支持：设置/清除 Clip 音频 loop（Undo/Redo）：`ProjectEditor.setClipAudioLoopRangeSeconds`（`Sources/EditorCore/EditorCore.swift`）+ 单测 `Tests/EditorCoreTests/EditorCoreTests.swift`
+- [x] 已支持：Slip（仅修改 `sourceInSeconds`，不动 timeline/duration，Undo/Redo）：`ProjectEditor.slipClip`（`Sources/EditorCore/EditorCore.swift`）+ 单测 `Tests/EditorCoreTests/EditorCoreTests.swift`
+- [x] 已支持：Clip 音频参数编辑（Undo/Redo）：`ProjectEditor.setClipGain` / `setClipPan` / `setClipAudioTimeStretchMode` / `setClipAudioReversePlaybackMode`（`Sources/EditorCore/EditorCore.swift`）+ 单测 `Tests/EditorCoreTests/EditorCoreTests.swift`
+- [x] 已支持：Clip 音频 mute/solo（Undo/Redo）：`ProjectEditor.setClipAudioMuted` / `setClipAudioSolo`（`Sources/EditorCore/EditorCore.swift`）+ 单测 `Tests/EditorCoreTests/EditorCoreTests.swift`
+- [x] 已支持：Track 音频参数编辑（Undo/Redo）：`ProjectEditor.setTrackVolume` / `setTrackPan`（`Sources/EditorCore/EditorCore.swift`）+ 单测 `Tests/EditorCoreTests/EditorCoreTests.swift`
+- [x] 已支持：Clip Fade In/Out（Undo/Redo）：`ProjectEditor.setClipFadeIn` / `setClipFadeOut`（`Sources/EditorCore/EditorCore.swift`）+ 单测 `Tests/EditorCoreTests/EditorCoreTests.swift`
+
 ---
 
 ## 2. TimelineEvaluator 输出 AudioGraph（EditorEngine）
@@ -48,6 +55,8 @@
 - [ ] 定义 `AudioGraph`：节点、边、输出端口（Main、Submix、Stems）
 - [ ] 定义节点类型（至少）：Source、TimeMap、Gain、Pan、Fade、Bus、MeterTap、AnalyzerTap
 - [ ] 定义参数快照：按时间点可查询（用于实时与离线一致性）
+  - [x] Phase 1：`TimelineEvaluator.evaluateAudioGraph` 已支持对 clip `volumeAutomation` / `panAutomation` 做时间点求值（线性/hold），并落到 `.gain/.pan` 节点常量值（逐采样 automation 后续由 renderer 接管）。
+  - [x] Phase 1：显式参数快照结构（`AudioGraph.parameterSnapshot`）已落地，可直接查询每个参与混音的 clip 的 effective gain/pan/mute 等（用于诊断与 golden tests）。
 
 ### 2.2 图编译（Graph Compile）
 - [ ] 编译为可执行计划：拓扑排序、常量折叠、节点合并（例如连续 gain 合并）
@@ -55,25 +64,26 @@
 - [ ] 缓存 key：图结构 hash + 参数版本
 
 ### 2.3 时间映射（Time Map）
-- [ ] Trim/Slip/Loop 映射到 sample 精度
-- [ ] Speed（匀速）映射：
-  - [ ] 先定义策略（保持音高 vs 随速度变）并做接口
-  - [ ] 为后续变速曲线/高质量 time‑stretch 预留扩展点
+- [x] Phase 1：纯类型/纯函数时间映射骨架（含 speed/reverse/loop + trim/slip 语义入口，不接入播放路径）：`Sources/EditorEngine/AudioTimeMap.swift` + 单测 `Tests/EditorEngineTests/EditorEngineTests.swift`
+- [x] Trim/Slip/Loop 映射到 sample 精度（图语义层已表达）：`Sources/EditorEngine/TimelineEvaluator.swift`（产出 sample 级 `timeMap`）+ `Sources/EditorEngine/AudioGraph.swift`（TimeMap 节点携带 `AudioTimeMap`）+ 单测 `Tests/EditorEngineTests/EditorEngineTests.swift`
+- [x] Speed（匀速）映射：
+  - [x] 先定义策略（保持音高 vs 随速度变）并做接口（已落地：`AudioTimeStretchMode` + `AudioNodeSpec.timeMap(mode:map:)`）
+  - [x] 为后续变速曲线/高质量 time‑stretch 预留扩展点（通过 `AudioTimeMap`/`AudioTimeStretchMode` 扩展即可，不改图语义）
 
 ---
 
 ## 3. 解码与媒体 IO（MediaIO / DecodePipeline）
 
 ### 3.1 统一解码接口
-- [ ] `AudioDecodeSource` 抽象：从音频文件或视频容器提取音轨
+- [x] `AudioDecodeSource` 抽象：从音频文件或视频容器提取音轨（已落地：`Sources/MediaIO/AVFoundationAudioDecodeSource.swift`）
 - [ ] 支持常见格式：AAC/MP3/WAV/AIFF/ALAC（按系统能力）
 - [ ] 元数据解析：sampleRate、channelCount、duration、loudness（可后置）
 
 ### 3.2 实时友好的缓存与预取
 - [ ] 分段 PCM cache（ring / chunk）
 - [ ] Seek 预取：playhead 前后窗口（按速率动态调整）
-- [ ] 多分辨率波形缓存：峰值/均方根，mip 级别
-- [ ] 缓存持久化：`Storage` 下按 key 存储，可失效/可重建
+- [x] 多分辨率波形缓存：峰值/均方根，mip 级别
+- [x] 缓存持久化：`Storage` 下按 key 存储，可失效/可重建（已落地：`AudioPCMCache` + `WaveformCache.invalidate`，并通过 `assetFingerprint` 避免素材变更误复用）
 
 ### 3.3 代理音频（可选但建议）
 - [ ] 背景生成代理（例如 48k float32、或轻量压缩 PCM）
@@ -266,74 +276,79 @@
 
 ### 14.1 EditorCore（数据模型：工程文件的长期稳定面）
 
-- [ ] `AudioTimeStretchMode`（枚举）：`keepPitch` / `varispeed` / `muteAudio`
-- [ ] `AudioReversePlaybackMode`（枚举）：`mute` / `roughReverse` / `highQualityReverse`
-- [ ] `AudioRole` / `AudioSubrole`：对标 FCP Roles（先定义基础三类 + 自定义扩展）
-- [ ] `AudioAutomationCurve<T>`：关键帧曲线（time,value,interpolation），并具备序列化格式版本号
-- [ ] Clip 音频字段：
-  - [ ] gain（线性/分贝表现层可分离）、pan/balance、fadeIn/fadeOut（含曲线形状）
-  - [ ] timeStretchMode（见上）、reversePlaybackMode（见上）
-  - [ ] role/subrole、outputBusId、send 参数（为后续 sends/returns 预留）
-- [ ] Track/Bus 字段：mute/solo/volume/pan、role bus 路由、send/return 定义
+- [x] `AudioTimeStretchMode`（枚举）：`keepPitch` / `varispeed` / `muteAudio`（已落地：`Sources/EditorCore/EditorCore.swift`）
+- [x] `AudioReversePlaybackMode`（枚举）：`mute` / `roughReverse` / `highQualityReverse`（已落地：`Sources/EditorCore/EditorCore.swift`）
+- [x] `AudioRole` / `AudioSubrole`：对标 FCP Roles（已落地：`Sources/EditorCore/EditorCore.swift`）
+- [x] `AudioAutomationCurve<T>`：关键帧曲线 + `version`（已落地：`Sources/EditorCore/EditorCore.swift`）
+- [x] Clip 音频字段（阶段性落地）：gain/pan、automation（volume/pan）、timeStretchMode/reversePlaybackMode、role/subrole、outputBusId（已落地：`Sources/EditorCore/EditorCore.swift`）
+  - [ ] fadeIn/fadeOut（含曲线形状）
+  - [ ] send 参数（为 sends/returns 预留）
+- [x] Track/Bus 字段（阶段性落地）：mute/solo/volume/pan、role/subrole、outputBusId（已落地：`Sources/EditorCore/EditorCore.swift`）
+  - [ ] send/return 定义
 
 ### 14.2 EditorEngine（评估与调度：单一真相的生成者）
 
-- [ ] `AudioGraph`（纯数据结构，可哈希/可序列化）：
-  - [ ] `nodes: [AudioNodeID: AudioNodeSpec]`
-  - [ ] `edges: [AudioEdge]`
-  - [ ] `outputs: AudioGraphOutputs`（main/submix/stems）
-  - [ ] `version`（用于缓存与迁移）
-- [ ] `AudioNodeSpec`（枚举/协议二选一，但必须可序列化）：
-  - [ ] `source(clipId, assetId, channelLayout, sourceFormat)`
-  - [ ] `timeMap(mode, speed, trim, loop, reverseMode)`
-  - [ ] `gain(value/automation)` / `pan(value/automation)` / `fade(params)`
-  - [ ] `bus(id, role, sends)`
-  - [ ] `meterTap(kind)` / `analyzerTap(kind)`
-- [ ] `AudioGraphCompiler`：`compile(graph, quality) -> AudioRenderPlan`
-  - [ ] 负责：拓扑排序、常量折叠、节点合并、资源绑定、plan hash（用于缓存）
-- [ ] `AudioClock` / `MediaClock`：
-  - [ ] `timelineTimeSeconds` ↔ `sampleTime` ↔ `hostTime` 的统一换算（48k 内部时基）
-  - [ ] loop 边界与 rounding 规则
-- [ ] `PlaybackSyncPolicy`：定义音画同步策略（谁为 master、漂移修正策略）
+- [x] `AudioGraph`（纯数据结构，可哈希/可序列化）（已落地：`Sources/EditorEngine/AudioGraph.swift`）
+  - [x] `nodes: [AudioNodeID: AudioNodeSpec]`
+  - [x] `edges: [AudioEdge]`
+  - [x] `outputs: AudioGraphOutputs`（当前：main 预留；submix/stems 后续补）
+  - [x] `version`
+- [x] `AudioNodeSpec`（枚举，可序列化）（已落地：`Sources/EditorEngine/AudioGraph.swift`）
+  - [x] `source(clipId, assetId, format)`（Phase 1：format 为可选 hint）
+  - [x] `timeMap(mode, speed, reverseMode)`（Phase 1：trim/loop 后续补）
+  - [x] `gain(value)` / `pan(value)`（Phase 1：automation 后续接入）
+  - [x] `bus(id, role)`（Phase 1：sends 后续补）
+  - [x] `meterTap` / `analyzerTap`（占位）
+- [x] `AudioGraphCompiler`：`compile(graph, quality) -> AudioRenderPlan`（已落地：`Sources/EditorEngine/AudioGraph.swift`）
+  - [x] 负责：拓扑排序（确定性）、常量折叠/节点合并（Phase 1：连续 gain 合并）、资源绑定（可选 binder）、plan hash（stableHash64）
+- [x] `AudioClock`（48k 秒↔sampleTime 换算 + rounding 规则）（已落地：`Sources/EditorEngine/AudioClock.swift`）
+  - [x] `MediaClock`（Phase 1：hostTime(ns) ↔ sampleTime 确定性换算 + loop 边界）—— `Sources/EditorEngine/MediaClock.swift`
+- [x] `PlaybackSyncPolicy`（占位枚举）（已落地：`Sources/EditorEngine/AudioClock.swift`）
 
 ### 14.3 MediaIO（解码与格式：把“文件”变成可用 PCM）
 
-- [ ] `AudioSourceFormat`：sampleRate、channelCount、channelLayout、sampleType（float32）
-- [ ] `AudioDecodeSource`：
-  - [ ] `readPCM(startSample: Int64, frameCount: Int) -> AudioPCMBlock`
-  - [ ] `preferredChunkSize` / `durationSamples`
-- [ ] `AudioResampler`：
-  - [ ] `process(input, fromRate, toRate, quality) -> output`
-  - [ ] realtime/high 两档实现
+- [x] `AudioSourceFormat`（Phase 1：sampleRate + channelCount；channelLayout 后续补）（已落地：`Sources/AudioEngine/AudioEngine.swift`）
+- [x] `AudioDecodeSource`（协议壳，占位）（已落地：`Sources/MediaIO/AudioDecode.swift`）
+  - [x] `readPCM(startFrame: Int64, frameCount: Int) -> AudioPCMBlock`
+  - [x] `preferredChunkFrames` / `durationFrames`
+- [x] `AudioResampler`（协议壳，占位）（已落地：`Sources/MediaIO/AudioDecode.swift`）
+  - [x] `process(input, fromRate, toRate, quality) -> output`
+  - [x] realtime/high 两档实现（`Sources/MediaIO/LinearAudioResampler.swift`）
 
 ### 14.4 RenderEngine 或新 AudioEngine 模块（执行器：Realtime/Offline 共用核心）
 
 > 音频执行器建议独立成模块（例如 `AudioEngine`），保持与视频 `RenderEngine` 对称；但也可以先放在 `RenderEngine` 下，后续再拆。
 
-- [ ] `AudioBuffer` / `AudioBufferPool`：固定容量、RT-safe 获取与归还
-- [ ] `AudioPCMBlock`：多声道 float32 planar/interleaved（选一种并写死）
-- [ ] `AudioRenderQuality`：`realtime` / `high`
-- [ ] `AudioRenderPlan`：编译后的可执行计划（节点实例 + 调度信息）
-- [ ] `AudioNodeRuntime`：
-  - [ ] `prepare(format, maxFrames)`
-  - [ ] `reset()`
-  - [ ] `process(context, frameCount) -> AudioPCMBlock`（必须 RT-safe）
-- [ ] `RealtimeAudioRenderer`：
-  - [ ] `start()/stop()/setRate()/seek()/setLoop(range)`
-  - [ ] 渲染回调里只消费 `AudioRenderPlan` 与缓存数据
-- [ ] `OfflineAudioRenderer`：
-  - [ ] `render(range, format) -> AudioPCMStream`（支持 stems 输出）
+- [ ] `AudioBuffer` / `AudioBufferPool`
+  - [x] 固定容量 buffer + pool 接口与默认实现（Phase 1：非 RT-safe，内部仍有锁；borrow/recycle 不再额外堆分配；并提供预分配不增长的 pool 变体；已落地：`Sources/AudioEngine/AudioEngine.swift`）
+  - [x] RT-safe 获取与归还（无锁/无分配/无 IO；预分配 + 原子 freelist；耗尽返回 empty buffer；已落地：`Sources/AudioEngine/AudioEngine.swift`（`RealtimeAudioBufferPool`））
+- [x] `AudioPCMBlock`：多声道 float32 interleaved（Phase 1 写死为 interleaved）（已落地：`Sources/AudioEngine/AudioEngine.swift`）
+- [x] `AudioRenderQuality`：`realtime` / `high`（已落地：`Sources/AudioEngine/AudioEngine.swift`）
+- [x] `AudioRenderPlan`（Phase 1：纯数据 plan + ordered nodes + stableHash64）（已落地：`Sources/EditorEngine/AudioGraph.swift`）
+- [x] `AudioNodeRuntime`（协议壳，占位）（已落地：`Sources/AudioEngine/AudioRuntime.swift`）
+  - [x] `prepare(format, maxFrames)`
+  - [x] `reset()`
+  - [x] `process(context, frameCount, pool) -> AudioBufferLease`
+- [x] `RealtimeAudioRenderer`（协议壳，占位）（已落地：`Sources/AudioEngine/AudioRuntime.swift`）
+  - [x] `setLoop(range)`（sampleTime range；默认 no-op）
+- [x] `OfflineAudioRenderer`（协议壳，占位）（已落地：`Sources/AudioEngine/AudioRuntime.swift`）
 
 ### 14.5 Storage（缓存：波形/分析/代理/渲染）
 
-- [ ] `AudioCacheKey`：
-  - [ ] assetFingerprint + clipId + 参数版本 + AudioGraph/Plan hash + 算法版本 + 输出格式
-- [ ] `WaveformCache`：多分辨率 mip（peak/RMS），按缩放级别读取
+- [x] `AudioCacheKey`（Phase 1：assetId + clipId + planStableHash64 + algorithmVersion + format）（已落地：`Sources/Storage/AudioCache.swift`）
+  - [x] assetFingerprint（后续补：用于路径/内容变更失效）
+  - [ ] 参数版本（后续补：区分 automation/效果参数变更）
+- [x] `WaveformCache`：多分辨率 mip（peak/RMS），按缩放级别读取
+- [x] `WaveformCache`：基础实现（Phase 1：peak/RMS 生成 + 持久化 + 按需 resample）—— `Sources/Storage/WaveformCache.swift`
 - [ ] `AnalysisCache`：FFT/相位/相关度等后台产物
 - [ ] `ProxyAudioCache`：代理音频文件与元数据
 
 ### 14.6 观测与测试（必须为专业可交付保驾护航）
-
-- [ ] `AudioDiagnostics`：xrun 计数、callback 耗时分布、cache hit/miss
-- [ ] `AudioGraphDump`：序列化输出（用于复现与问题定位）
-- [ ] Golden tests 输入/输出规范：指定工程与时间范围，输出统计（RMS/peak/LUFS）与可比对的 hash
+- [x] xrun/underflow 计数（Phase 1：buffer pool underflow + snapshot；已落地：`Sources/AudioEngine/AudioEngine.swift`）
+- [x] callback 耗时分布（Phase 1：桶统计 + 收集器接口；当前 lock-based，非 RT-safe）—— `Sources/AudioEngine/AudioEngine.swift`（`AudioCallbackTimingSnapshot` / `AudioCallbackTimingCollector`）
+- [x] cache hit/miss（Phase 1：计数 + 按 cacheKind 分桶 + 收集器接口；当前 lock-based，非 RT-safe）—— `Sources/AudioEngine/AudioEngine.swift`（`AudioCacheMetricsSnapshot` / `AudioCacheMetricsCollector` / `AudioCacheKind`）
+- [x] `AudioGraphDump`：稳定序列化输出（用于复现与问题定位；节点/边按 ID 排序，JSON sortedKeys；包含 `parameterSnapshot`）—— `Sources/EditorEngine/AudioGraphDump.swift`
+- [x] Golden tests 输入/输出规范（Phase 1：PCM 统计 peak/RMS + 稳定 hash64 + 可序列化 snapshot；LUFS 等后续补）—— `Sources/AudioEngine/AudioGolden.swift`
+  - [x] Golden case 描述与稳定 key/文件名（Phase 1：稳定 key 只由输入决定；无 IO）—— `Sources/EditorEngine/GoldenAudioCase.swift`
+  - [x] Golden runner 入口（Phase 1：case -> OfflineAudioRenderer -> snapshot；仍不实现真正 renderer）—— `Sources/EditorEngine/GoldenAudioRunner.swift`
+  - [x] Golden snapshot 文件落盘与对比（Phase 1：JSON IO + `YUNQI_UPDATE_GOLDENS=1` 更新）—— `Sources/EditorEngine/GoldenAudioStore.swift` / `Tests/EditorEngineTests/Goldens/`

@@ -145,7 +145,10 @@ final class AVAssetWriterExecutor: ExportExecutor {
         // Decode to uncompressed frames for re-encode.
         let videoReaderOutput: AVAssetReaderOutput = {
             let settings: [String: Any] = [
-                kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)
+                // Match MetalVideoCompositor render output (BGRA) to avoid an extra conversion.
+                kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
+                kCVPixelBufferMetalCompatibilityKey as String: true,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any]()
             ]
             if let videoComposition {
                 let o = AVAssetReaderVideoCompositionOutput(videoTracks: [videoTrack], videoSettings: settings)
@@ -239,9 +242,12 @@ final class AVAssetWriterExecutor: ExportExecutor {
         let pixelBufferAdaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: writerInput,
             sourcePixelBufferAttributes: [
-                kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange),
+                // Feed BGRA frames directly; the encoder will handle conversion to its preferred format.
+                kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
                 kCVPixelBufferWidthKey as String: width,
-                kCVPixelBufferHeightKey as String: height
+                kCVPixelBufferHeightKey as String: height,
+                kCVPixelBufferMetalCompatibilityKey as String: true,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any]()
             ]
         )
 

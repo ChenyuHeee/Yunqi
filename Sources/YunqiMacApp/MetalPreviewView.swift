@@ -13,7 +13,7 @@ enum PreviewQuality: Sendable {
 final class MetalPreviewRenderer: NSObject, MTKViewDelegate {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
-    private let ciContext: CIContext
+    private var ciContext: CIContext?
 
     private var textureCache: CVMetalTextureCache?
     private var blitBGRAPipeline: MTLRenderPipelineState?
@@ -31,6 +31,16 @@ final class MetalPreviewRenderer: NSObject, MTKViewDelegate {
         ProcessInfo.processInfo.environment["YUNQI_METALPREVIEW_DEBUG"] == "1"
     }()
 
+    private static func fourCC(_ fmt: OSType) -> String {
+        let a = UInt8((fmt >> 24) & 0xFF)
+        let b = UInt8((fmt >> 16) & 0xFF)
+        let c = UInt8((fmt >> 8) & 0xFF)
+        let d = UInt8(fmt & 0xFF)
+        let chars: [UInt8] = [a, b, c, d]
+        let printable = chars.map { ($0 >= 32 && $0 <= 126) ? $0 : UInt8(ascii: ".") }
+        return String(bytes: printable, encoding: .ascii) ?? String(format: "0x%08X", fmt)
+    }
+
     init?(mtkView: MTKView) {
         guard let device = mtkView.device ?? MTLCreateSystemDefaultDevice() else {
             return nil
@@ -40,7 +50,7 @@ final class MetalPreviewRenderer: NSObject, MTKViewDelegate {
             return nil
         }
         self.commandQueue = queue
-        self.ciContext = CIContext(mtlDevice: device)
+        self.ciContext = nil
 
         super.init()
 
@@ -63,6 +73,15 @@ final class MetalPreviewRenderer: NSObject, MTKViewDelegate {
         mtkView.colorspace = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         mtkView.drawableSize = mtkView.bounds.size
         mtkView.delegate = self
+    }
+
+    private func ciContextForFallback() -> CIContext {
+        if let ciContext {
+            return ciContext
+        }
+        let ctx = CIContext(mtlDevice: device)
+        ciContext = ctx
+        return ctx
     }
 
     private static func windowBackgroundClearColor() -> MTLClearColor {
@@ -565,11 +584,18 @@ final class MetalPreviewRenderer: NSObject, MTKViewDelegate {
                         }
                     )
                 } else {
+                    if Self.isGeometryDebugEnabled {
+                        NSLog(
+                            "[MetalPreview] CVMetalTextureCacheCreateTextureFromImage(BGRA) failed status=%d fmt=%@",
+                            Int(status),
+                            Self.fourCC(fmt)
+                        )
+                    }
                     Self.renderWithCI(
                         pb: pb,
                         drawableTexture: drawable.texture,
                         commandBuffer: commandBuffer,
-                        ciContext: ciContext,
+                        ciContext: ciContextForFallback(),
                         targetRect: sourceRect
                     )
                 }
@@ -628,20 +654,36 @@ final class MetalPreviewRenderer: NSObject, MTKViewDelegate {
                         }
                     )
                 } else {
+                    if Self.isGeometryDebugEnabled {
+                        NSLog(
+                            "[MetalPreview] CVMetalTextureCacheCreateTextureFromImage(NV12) failed yStatus=%d cStatus=%d fmt=%@ planes=%d",
+                            Int(yStatus),
+                            Int(cStatus),
+                            Self.fourCC(fmt),
+                            CVPixelBufferGetPlaneCount(pb)
+                        )
+                    }
                     Self.renderWithCI(
                         pb: pb,
                         drawableTexture: drawable.texture,
                         commandBuffer: commandBuffer,
-                        ciContext: ciContext,
+                        ciContext: ciContextForFallback(),
                         targetRect: sourceRect
                     )
                 }
             } else {
+                if Self.isGeometryDebugEnabled {
+                    NSLog(
+                        "[MetalPreview] Unsupported pixel format for Metal blit fmt=%@ planes=%d -> CI fallback",
+                        Self.fourCC(fmt),
+                        CVPixelBufferGetPlaneCount(pb)
+                    )
+                }
                 Self.renderWithCI(
                     pb: pb,
                     drawableTexture: drawable.texture,
                     commandBuffer: commandBuffer,
-                    ciContext: ciContext,
+                    ciContext: ciContextForFallback(),
                     targetRect: sourceRect
                 )
             }
@@ -650,7 +692,7 @@ final class MetalPreviewRenderer: NSObject, MTKViewDelegate {
             if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passClear) {
                 encoder.endEncoding()
             }
-            Self.renderWithCI(pb: pb, drawableTexture: drawable.texture, commandBuffer: commandBuffer, ciContext: ciContext, targetRect: nil)
+            Self.renderWithCI(pb: pb, drawableTexture: drawable.texture, commandBuffer: commandBuffer, ciContext: ciContextForFallback(), targetRect: nil)
         } else {
             if let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: passClear) {
                 encoder.endEncoding()
