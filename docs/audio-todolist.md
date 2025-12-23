@@ -255,3 +255,85 @@
   - EditorCore：clip/track 增加 role/subrole、output bus、send 参数等字段（即使 UI 暂不暴露）。
   - AudioGraph：必须支持 main bus + role bus 的路由表达，并为 stems 输出端口预留。
   - 导出（Delivery）：stems 导出只是一种“输出选择”，不应重写渲染逻辑。
+
+---
+
+## 14. 接口落地清单（代码骨架：把“决策”变成可演进的类型边界）
+
+这一节的目标不是实现功能，而是把未来一定会需要的“边界与接口”一次定好：
+- 后续迭代只在这些边界内增加实现/优化，不靠推倒重来。
+- 所有接口要支持：realtime/high 两档质量、可序列化参数、可缓存 key、可测试（deterministic）。
+
+### 14.1 EditorCore（数据模型：工程文件的长期稳定面）
+
+- [ ] `AudioTimeStretchMode`（枚举）：`keepPitch` / `varispeed` / `muteAudio`
+- [ ] `AudioReversePlaybackMode`（枚举）：`mute` / `roughReverse` / `highQualityReverse`
+- [ ] `AudioRole` / `AudioSubrole`：对标 FCP Roles（先定义基础三类 + 自定义扩展）
+- [ ] `AudioAutomationCurve<T>`：关键帧曲线（time,value,interpolation），并具备序列化格式版本号
+- [ ] Clip 音频字段：
+  - [ ] gain（线性/分贝表现层可分离）、pan/balance、fadeIn/fadeOut（含曲线形状）
+  - [ ] timeStretchMode（见上）、reversePlaybackMode（见上）
+  - [ ] role/subrole、outputBusId、send 参数（为后续 sends/returns 预留）
+- [ ] Track/Bus 字段：mute/solo/volume/pan、role bus 路由、send/return 定义
+
+### 14.2 EditorEngine（评估与调度：单一真相的生成者）
+
+- [ ] `AudioGraph`（纯数据结构，可哈希/可序列化）：
+  - [ ] `nodes: [AudioNodeID: AudioNodeSpec]`
+  - [ ] `edges: [AudioEdge]`
+  - [ ] `outputs: AudioGraphOutputs`（main/submix/stems）
+  - [ ] `version`（用于缓存与迁移）
+- [ ] `AudioNodeSpec`（枚举/协议二选一，但必须可序列化）：
+  - [ ] `source(clipId, assetId, channelLayout, sourceFormat)`
+  - [ ] `timeMap(mode, speed, trim, loop, reverseMode)`
+  - [ ] `gain(value/automation)` / `pan(value/automation)` / `fade(params)`
+  - [ ] `bus(id, role, sends)`
+  - [ ] `meterTap(kind)` / `analyzerTap(kind)`
+- [ ] `AudioGraphCompiler`：`compile(graph, quality) -> AudioRenderPlan`
+  - [ ] 负责：拓扑排序、常量折叠、节点合并、资源绑定、plan hash（用于缓存）
+- [ ] `AudioClock` / `MediaClock`：
+  - [ ] `timelineTimeSeconds` ↔ `sampleTime` ↔ `hostTime` 的统一换算（48k 内部时基）
+  - [ ] loop 边界与 rounding 规则
+- [ ] `PlaybackSyncPolicy`：定义音画同步策略（谁为 master、漂移修正策略）
+
+### 14.3 MediaIO（解码与格式：把“文件”变成可用 PCM）
+
+- [ ] `AudioSourceFormat`：sampleRate、channelCount、channelLayout、sampleType（float32）
+- [ ] `AudioDecodeSource`：
+  - [ ] `readPCM(startSample: Int64, frameCount: Int) -> AudioPCMBlock`
+  - [ ] `preferredChunkSize` / `durationSamples`
+- [ ] `AudioResampler`：
+  - [ ] `process(input, fromRate, toRate, quality) -> output`
+  - [ ] realtime/high 两档实现
+
+### 14.4 RenderEngine 或新 AudioEngine 模块（执行器：Realtime/Offline 共用核心）
+
+> 音频执行器建议独立成模块（例如 `AudioEngine`），保持与视频 `RenderEngine` 对称；但也可以先放在 `RenderEngine` 下，后续再拆。
+
+- [ ] `AudioBuffer` / `AudioBufferPool`：固定容量、RT-safe 获取与归还
+- [ ] `AudioPCMBlock`：多声道 float32 planar/interleaved（选一种并写死）
+- [ ] `AudioRenderQuality`：`realtime` / `high`
+- [ ] `AudioRenderPlan`：编译后的可执行计划（节点实例 + 调度信息）
+- [ ] `AudioNodeRuntime`：
+  - [ ] `prepare(format, maxFrames)`
+  - [ ] `reset()`
+  - [ ] `process(context, frameCount) -> AudioPCMBlock`（必须 RT-safe）
+- [ ] `RealtimeAudioRenderer`：
+  - [ ] `start()/stop()/setRate()/seek()/setLoop(range)`
+  - [ ] 渲染回调里只消费 `AudioRenderPlan` 与缓存数据
+- [ ] `OfflineAudioRenderer`：
+  - [ ] `render(range, format) -> AudioPCMStream`（支持 stems 输出）
+
+### 14.5 Storage（缓存：波形/分析/代理/渲染）
+
+- [ ] `AudioCacheKey`：
+  - [ ] assetFingerprint + clipId + 参数版本 + AudioGraph/Plan hash + 算法版本 + 输出格式
+- [ ] `WaveformCache`：多分辨率 mip（peak/RMS），按缩放级别读取
+- [ ] `AnalysisCache`：FFT/相位/相关度等后台产物
+- [ ] `ProxyAudioCache`：代理音频文件与元数据
+
+### 14.6 观测与测试（必须为专业可交付保驾护航）
+
+- [ ] `AudioDiagnostics`：xrun 计数、callback 耗时分布、cache hit/miss
+- [ ] `AudioGraphDump`：序列化输出（用于复现与问题定位）
+- [ ] Golden tests 输入/输出规范：指定工程与时间范围，输出统计（RMS/peak/LUFS）与可比对的 hash
