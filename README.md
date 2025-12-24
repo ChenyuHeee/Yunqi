@@ -5,7 +5,7 @@
 <h1 align="center">云起（Yunqi）</h1>
 
 <p align="center">
-  面向 <b>Apple Silicon</b> 优化的 macOS 视频剪辑工具：专注“顺滑预览 + 高效时间线编辑”。
+  面向 <b>Apple Silicon</b> 优化的 macOS 视频剪辑工具：专注「顺滑预览 × 高效时间线编辑」。
 </p>
 
 <p align="center">
@@ -24,16 +24,46 @@
 
 ---
 
-## 截图
+## 一句话
 
-> 你可以把截图放到 `docs/` 或 `assets/`，然后把链接补到这里。
+如果你在找一个**更贴近“剪辑手感”**的 macOS 编辑器：Yunqi 把“预览链路”和“时间线编辑”当作第一优先级来做，并围绕 Apple Silicon 的图形与音频能力持续优化。
 
-## 亮点
+> 这是一个仍在快速迭代中的项目：欢迎试用、提 Issue、或直接上车贡献。
 
-- **真实预览**：基于 AVFoundation 的播放与抽帧显示，能跟随时间线变更即时更新。
+## 适合谁
+
+- 想要一个 **原生 macOS**、偏专业剪辑交互的编辑器（而不是网页/跨端壳）。
+- 对 **预览是否顺滑**、**时间线操作是否稳定可预期** 比“功能堆叠”更在意。
+- 对音频/渲染的工程质量有要求：希望关键链路**可测试、可回归、可确定性复现**。
+
+## 截图 / 演示
+
+> 建议把截图/GIF 放到 `docs/` 或 `assets/`，然后把链接补到这里。
+
+- （占位）主界面 + 时间线
+- （占位）预览窗口（Metal）
+- （占位）Blade / Ripple Delete 演示
+
+## 核心能力
+
 - **时间线编辑**：拖拽移动、边缘 Trim、吸附对齐；支持 Final Cut 风格的 Blade / Blade All。
-- **撤销/重做**：编辑动作可回退、可恢复，适合快速试错。
-- **快捷键友好**：J/K/L 播放控制、逐帧、循环等。
+- **撤销/重做**：编辑动作可回退、可恢复（适合快速试错）。
+- **预览链路（Apple Silicon 优先）**：以 Metal 为优先路径，尽量减少非必要回退。
+- **音频确定性底座**：48k sample clock、稳定 key/哈希、稳定 JSON dump、可回归的 golden 框架。
+- **缓存体系（可失效/可重建）**：波形多分辨率 mip 持久化、PCM 分段缓存；素材变更通过 fingerprint 避免误复用。
+
+## 为什么值得关注（给“路人/评审/未来的你”）
+
+- **工程可信**：关键链路有单元测试与回归测试（`swift test`）兜底。
+- **确定性优先**：同输入、同配置应输出一致——方便定位问题、做性能对比、做长期演进。
+- **Apple Silicon 友好**：在能吃到收益的地方优先走 Metal / Accelerate 思路。
+
+> 想看更详细的设计与模块说明：见 [docs/prepare.md](docs/prepare.md)
+
+## 下载与体验（用户）
+
+- 直接下载：<https://github.com/ChenyuHeee/Yunqi/releases/latest>
+- 如果你更想从源码跑起来：见下方“本地运行（开发者）”。
 
 ## 快捷键（常用）
 
@@ -52,6 +82,12 @@
 
 - 构建：`swift build --product YunqiMacApp`
 - 启动（推荐）：`./run-macapp.sh`
+- 测试（推荐先跑）：`swift test`
+
+## 路线图
+
+- 音频与渲染相关的推进清单：`docs/audio-todolist.md`
+- Bug / 需求：<https://github.com/ChenyuHeee/Yunqi/issues>
 
 ## GitHub Insights
 
@@ -84,6 +120,5 @@
 
 ## 开发备注
 
-- 测试：`swift test`
 - 设计与模块说明： [docs/prepare.md](docs/prepare.md)
 
